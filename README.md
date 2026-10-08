@@ -103,12 +103,20 @@ Use Restart and Run All. The notebook rewrites the source files with `%%writefil
 the pipeline from scratch, starts the API in the background (its output goes to
 `api.log`) and runs the tests.
 
-### Rebuild the report
+### Build the report
 
-Only needed after a fresh notebook run:
+Run this after a fresh notebook run (Restart and Run All, then save). It refreshes the
+numbers in `13.md`, retakes the screenshots in `docs/screenshots/` and rebuilds `13.pdf`.
 
 ```bash
-pip install -r requirements-report.txt
-playwright install chromium
-python build_report.py             # or --no-shots / --no-pdf
+pip install markdown playwright    # same as: pip install -r requirements-report.txt
+playwright install chromium        # one time: downloads the headless browser
+python build_report.py
 ```
+
+- `python build_report.py --no-shots` keeps the existing screenshots.
+- `python build_report.py --no-pdf` only updates `13.md`.
+
+Retaking screenshots starts an MLflow server and the API itself, so `mlflow.db` and
+`mlruns/` from a pipeline run must exist, and the machine needs internet access because
+the FastAPI docs page loads Swagger UI from a CDN.
