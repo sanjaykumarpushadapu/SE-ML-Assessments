@@ -97,6 +97,33 @@ def test_BR010_filters_do_not_mutate_their_input(tiny_df):
     pd.testing.assert_frame_equal(tiny_df, before)
 
 
+@pytest.mark.parametrize("column,value,message", [
+    ("V1", np.inf, "finite"),
+    ("V1", -np.inf, "finite"),
+    ("V1", "invalid", "numeric"),
+    ("Amount", -1.0, "nonnegative"),
+    ("Class", 2, "Class"),
+])
+def test_BR010_clean_rejects_invalid_training_values(tiny_df, column, value, message):
+    invalid = tiny_df.copy(deep=True)
+    if isinstance(value, str):
+        invalid[column] = invalid[column].astype(object)
+    invalid.loc[0, column] = value
+    with pytest.raises(ValueError, match=message):
+        clean_mod.clean(invalid)
+
+
+@pytest.mark.parametrize("label", [0, 1])
+def test_BR010_clean_requires_both_classes(tiny_df, label):
+    with pytest.raises(ValueError, match="both 0 and 1"):
+        clean_mod.clean(tiny_df[tiny_df[config.TARGET] == label])
+
+
+def test_BR010_clean_rejects_empty_dataset(tiny_df):
+    with pytest.raises(ValueError, match="No training rows"):
+        clean_mod.clean(tiny_df.iloc[:0])
+
+
 def test_BR010_each_filter_is_a_separate_function():
     """Each filter is its own function in its own module."""
     for fn in (ingest_mod.ingest, clean_mod.clean, features.build_features, split_mod.split,
@@ -142,6 +169,23 @@ def test_BR011_seed_is_42_everywhere():
     assert config.SEED == 42
     for name in train_mod.CANDIDATES:
         assert train_mod.make_estimator(name).random_state == 42
+
+
+def test_BR011_native_and_docker_artifact_paths_are_separate(monkeypatch, tmp_path):
+    import importlib
+
+    try:
+        with monkeypatch.context() as settings:
+            settings.delenv("MLFLOW_ARTIFACT_DIR", raising=False)
+            importlib.reload(config)
+            assert config.ARTIFACT_DIR == config.ROOT / "mlruns-native"
+            assert config.ARTIFACT_DIR != config.ROOT / "mlruns"
+            docker_artifacts = tmp_path / "docker-mlruns"
+            settings.setenv("MLFLOW_ARTIFACT_DIR", str(docker_artifacts))
+            importlib.reload(config)
+            assert config.ARTIFACT_ROOT == docker_artifacts.as_uri()
+    finally:
+        importlib.reload(config)
 
 
 def test_BR011_same_seed_gives_same_split_and_results(tiny_df, tmp_path):

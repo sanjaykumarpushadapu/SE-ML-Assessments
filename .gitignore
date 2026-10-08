@@ -21,3 +21,6 @@ Assigenment-1/mlruns/
 Assigenment-1/predictions_log.csv
 Assigenment-1/api.log
 Assigenment-1/artifacts/test_scores.csv
+/Assigenment-1/tests/__pycache__
+/Assigenment-1/pipeline/__pycache__
+/Assigenment-1/pipeline/__pycache__

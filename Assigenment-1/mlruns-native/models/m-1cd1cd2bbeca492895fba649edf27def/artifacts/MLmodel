@@ -1,0 +1,54 @@
+artifact_path: file:///C:/Projects/SE-ML-Assessments/Assigenment-1/mlruns-native/models/m-1cd1cd2bbeca492895fba649edf27def/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.14.7
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.9.1
+    skops_trusted_types: null
+is_signature_from_type_hint: false
+mlflow_version: 3.17.0
+model_id: m-1cd1cd2bbeca492895fba649edf27def
+model_size_bytes: 1780236
+model_uuid: m-1cd1cd2bbeca492895fba649edf27def
+prompts: null
+run_id: 8484061f3a9946499349fd537eed676e
+saved_input_example_info:
+  artifact_path: input_example.json
+  pandas_orient: split
+  serving_input_path: serving_input_example.json
+  type: dataframe
+signature:
+  inputs: '[{"type": "double", "name": "Time", "required": true}, {"type": "double",
+    "name": "V1", "required": true}, {"type": "double", "name": "V2", "required":
+    true}, {"type": "double", "name": "V3", "required": true}, {"type": "double",
+    "name": "V4", "required": true}, {"type": "double", "name": "V5", "required":
+    true}, {"type": "double", "name": "V6", "required": true}, {"type": "double",
+    "name": "V7", "required": true}, {"type": "double", "name": "V8", "required":
+    true}, {"type": "double", "name": "V9", "required": true}, {"type": "double",
+    "name": "V10", "required": true}, {"type": "double", "name": "V11", "required":
+    true}, {"type": "double", "name": "V12", "required": true}, {"type": "double",
+    "name": "V13", "required": true}, {"type": "double", "name": "V14", "required":
+    true}, {"type": "double", "name": "V15", "required": true}, {"type": "double",
+    "name": "V16", "required": true}, {"type": "double", "name": "V17", "required":
+    true}, {"type": "double", "name": "V18", "required": true}, {"type": "double",
+    "name": "V19", "required": true}, {"type": "double", "name": "V20", "required":
+    true}, {"type": "double", "name": "V21", "required": true}, {"type": "double",
+    "name": "V22", "required": true}, {"type": "double", "name": "V23", "required":
+    true}, {"type": "double", "name": "V24", "required": true}, {"type": "double",
+    "name": "V25", "required": true}, {"type": "double", "name": "V26", "required":
+    true}, {"type": "double", "name": "V27", "required": true}, {"type": "double",
+    "name": "V28", "required": true}, {"type": "double", "name": "Amount", "required":
+    true}]'
+  outputs: '[{"type": "long", "required": true}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2026-10-08 06:33:58.984724'

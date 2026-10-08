@@ -5,21 +5,25 @@ Run it after the notebook has been run from top to bottom (Restart + Run All) an
 
     python build_report.py            # update 13.md values, retake screenshots, make 13.pdf
     python build_report.py --no-shots # same, but keep the existing screenshots
-    python build_report.py --no-pdf   # only update 13.md
+    python build_report.py --no-pdf   # update 13.md and screenshots, skip 13.pdf
 
 Needs (once):  pip install markdown playwright   and   playwright install chromium
 
 How it works
   * Numbers come from artifacts/metrics.json (written by the pipeline) and from the saved outputs of 13.ipynb.
+    * When Docker outputs are present, keep its services running. Current metrics must match the live API and
+        registry; older notebook outputs are labelled historical rather than blocking a verified current report.
   * 13.md has blocks marked  <!--A:name--> ... <!--/A:name-->  . Only the text inside these blocks is rewritten,
     everything else in 13.md is left alone, so it is safe to edit the rest by hand.
-  * Screenshots are saved in docs/screenshots/ (MLflow and FastAPI pages are opened in a headless browser,
-    the other four are drawn from the notebook outputs).
+    * Screenshots are saved in docs/screenshots/. MLflow and FastAPI use live Docker services when the notebook
+        contains successful Docker checks; otherwise temporary native services use available localhost ports.
+        Other screenshots show saved notebook output, live Compose status, and read-only Docker SQLite inspection.
   * Charts (Figures 1-7) are not kept as files. Each one is copied from the notebook output into its
     <!--A:fig_...--> block in 13.md as an embedded image, with a caption built from the same run.
 """
 import argparse, ast, html, json, os, re, socket, subprocess, sys, time
 from pathlib import Path
+from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parent
 NB, MD, METRICS = ROOT / "13.ipynb", ROOT / "13.md", ROOT / "artifacts" / "metrics.json"
@@ -30,8 +34,10 @@ NAMES = {"logistic_regression": "Logistic Regression", "random_forest": "Random 
 # ---------------------------------------------------------------- read the run ----------------
 def cell_text(nb, marker):
     """Text printed by the first code cell whose source contains `marker`."""
+    markers = (marker,) if isinstance(marker, str) else marker
     for c in nb["cells"]:
-        if c["cell_type"] == "code" and marker in "".join(c["source"]):
+        source = "".join(c["source"])
+        if c["cell_type"] == "code" and not source.startswith("%%writefile") and any(text in source for text in markers):
             return "".join("".join(o.get("text", [])) for o in c.get("outputs", []) if o["output_type"] == "stream")
     raise SystemExit(f"Cell with '{marker}' has no output. Run the notebook from top to bottom first.")
 
@@ -56,9 +62,13 @@ def cell_image(nb, marker):
 
 
 def collect():
-    m = json.loads(METRICS.read_text())
-    nb = json.loads(NB.read_text())
-    pipe = cell_text(nb, "!python -m pipeline.run_pipeline")
+    m = json.loads(METRICS.read_text(encoding="utf-8"))
+    nb = json.loads(NB.read_text(encoding="utf-8"))
+    pipe = cell_text(nb, ("# Cell: rebuild the registry", "# Cell: rebuild the native registry", "!python -m pipeline.run_pipeline"))
+    if "[1/6 ingest]" not in pipe:
+        pipe = docker_output(nb)
+    if "[1/6 ingest]" not in pipe:
+        raise SystemExit("No saved pipeline output. Run and save the Docker training cell before building the report.")
     c = {"m": m, "nb": nb, "pipe": pipe}
     c["rows"] = int(re.search(r"\[1/6 ingest\]\s+rows=(\d+)", pipe).group(1))
     cl = re.search(r"rows=(\d+) \(removed (\d+)\), fraud=(\d+) \(([\d.]+)%\)", pipe)
@@ -69,16 +79,68 @@ def collect():
     eda = cell_text(nb, "# Cell: first look")
     c["raw_fraud"] = int(re.search(r"^1\s+(\d+)", eda, re.M).group(1))
     c["raw_pct"] = re.search(r"Fraud rate: ([\d.]+)%", eda).group(1)
-    lat = re.search(r"median ([\d.]+) ms, p95 ([\d.]+) ms, max ([\d.]+) ms", cell_text(nb, "# Cell: send 100 requests"))
+    lat = re.search(r"median ([\d.]+) ms, p95 ([\d.]+) ms, max ([\d.]+) ms",
+                    cell_text(nb, ("# Cell: send 100 requests", "# Cell: measure 100 successful responses")))
     c["lat"] = lat.groups()
-    c["tests"] = re.search(r"(\d+) passed", re.sub(r"\x1b\[[0-9;]*m", "", cell_text(nb, "# Cell: run all automated tests"))).group(1)
+    c["tests"] = re.search(r"(\d+) passed", re.sub(r"\x1b\[[0-9;]*m", "",
+                           cell_text(nb, ("# Cell: run all automated tests", "# Cell: run tests with the active kernel")))).group(1)
     calls = cell_text(nb, "# Cell: send one fraud row")
     c["fraud_call"] = json.loads(calls.split("--- fraud transaction (HTTP 200)")[1].split("--- genuine")[0])
     c["genuine_call"] = json.loads(calls.split("--- genuine transaction (HTTP 200)")[1])
     c["rows_logged"] = re.search(r"Rows logged: (\d+)", cell_text(nb, "# Cell: show the prediction log")).group(1)
     reg = cell_text(nb, "# Cell: show the MLflow runs")
     c["version"] = re.search(r"points to version (\d+)", reg).group(1)
+    docker_version = re.search(r"(?:Docker champion version:|champion -> version)\s*(\d+)", docker_output(nb))
+    c["docker_version"] = docker_version.group(1) if docker_version else None
+    docker_health = re.search(r"^Health:\s*(.+)$", docker_output(nb), re.M)
+    c["docker_health"] = ast.literal_eval(docker_health.group(1)) if docker_health else None
+    c["metrics_registry"] = "native"
+    if c["docker_version"] is not None:
+        verify_live_docker(c)
+    elif str(m.get("model_version")) != c["version"] or m["threshold"] != c["fraud_call"]["threshold"]:
+        raise SystemExit("Metrics do not match the saved native evaluation. Run the notebook and save its outputs first.")
     return c
+
+
+def verify_live_docker(c):
+    m = c["m"]
+    saved_version = c["docker_version"]
+    try:
+        api_url = docker_url("prediction-api", 8000)
+        registry_url = docker_url("registry", 5000)
+        health = read_json(f"{api_url}/health")
+        model = read_json(f"{registry_url}/api/2.0/mlflow/registered-models/alias?name=fraud-model&alias=champion")["model_version"]
+        run = read_json(f"{registry_url}/api/2.0/mlflow/runs/get?run_id={model['run_id']}")["run"]["data"]
+        params = {item["key"]: item["value"] for item in run["params"]}
+        metrics = {item["key"]: item["value"] for item in run["metrics"]}
+        matches = (
+            health["status"] == "ok"
+            and str(health["model_version"]) == str(model["version"]) == str(m["model_version"])
+            and health["threshold"] == float(params["threshold"]) == m["threshold"]
+            and params["model_name"] == m["winner"]
+            and all(metrics.get(f"{split}_{key}") == value
+                    for split in ("val", "test") for key, value in m[split].items()
+                    if key not in ("tn", "fp", "fn", "tp"))
+        )
+        if not matches:
+            raise ValueError("current metrics, live API, champion, or logged evaluation metrics do not match")
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, SystemExit) as error:
+        raise SystemExit(
+            f"Could not verify metrics version {m.get('model_version')} against live Docker: {error}. "
+            "Start the matching Docker registry and API, or rerun the Docker training workflow. "
+            "Older saved notebook versions alone do not prevent report generation."
+        ) from error
+    c["saved_docker_version"] = saved_version
+    c["version"] = c["docker_version"] = str(model["version"])
+    c["docker_health"] = health
+    c["metrics_registry"] = "Docker"
+    c["live_docker"] = (
+        f"Live Docker champion version: {model['version']}\n"
+        f"MLflow run: {model['run_id']}\n"
+        f"Health: {health}\n"
+        "Current evaluation metrics verified against the live MLflow run."
+    )
+    print(c["live_docker"])
 
 
 # ---------------------------------------------------------------- text blocks ------------------
@@ -121,7 +183,15 @@ def g_results(c):
                     f"so the fraud loss goes down by {pct(t['loss_reduction'])}, against the target of 30% ({'met' if m['targets_met'].get('loss_ok') else 'not met'}). "
                     f"The cost is that genuine transactions worth {t['genuine_amount_blocked']:,.2f} were also flagged, and a real bank would have to consider the cost of these blocked payments too. "
                     "This is only an estimate from the test set and it does not include chargeback fees or the cost of reviewing the flagged transactions.\n\n")
-    return f"""**Model results:** The dataset has {n(c['rows'])} rows with {c['raw_fraud']} frauds ({c['raw_pct']}%). After removing {n(c['removed'])} duplicate rows, {n(c['clean_rows'])} rows remain with {c['clean_fraud']} frauds ({c['clean_pct']}%). The stratified split gives {n(c['train'])} training, {n(c['val'])} validation and {n(c['test'])} test rows. For each model the threshold is the highest one that still gives a validation recall of at least 0.90.
+    evidence = (f"**Run evidence:** These metrics describe {c['metrics_registry']} champion version {c['version']}. "
+                f"Docker screenshots describe the separate Docker champion version {c['docker_version']}. "
+                f"The saved native prediction examples serve version {c['fraud_call']['model_version']}; "
+                "latency measurements and charts come from the saved native notebook run. "
+                "Native and Docker registries have independent version numbers.\n\n") if c["docker_version"] else ""
+    if c.get("live_docker"):
+        evidence += ("**Evidence source:** The current Docker version, threshold, selected model, and evaluation metrics were verified against "
+                     "the live Docker API and champion's MLflow run; saved notebook outputs are historical evidence.\n\n")
+    return f"""{evidence}**Model results:** The dataset has {n(c['rows'])} rows with {c['raw_fraud']} frauds ({c['raw_pct']}%). After removing {n(c['removed'])} duplicate rows, {n(c['clean_rows'])} rows remain with {c['clean_fraud']} frauds ({c['clean_pct']}%). The stratified split gives {n(c['train'])} training, {n(c['val'])} validation and {n(c['test'])} test rows. For each model the threshold is the highest one that still gives a validation recall of at least 0.90.
 
 | Model (validation) | Threshold | Recall | Precision | FPR | PR-AUC |
 |---|---|---|---|---|---|
@@ -150,9 +220,11 @@ def g_analytics(c):
 
 def g_registry(c):
     m = c["m"]
-    return (f"After the run, fraud-model has {NAMES[m['winner']]} as version {c['version']} with the alias champion, and the stored "
-            f"threshold is {m['threshold']:.4f}. The prediction service loads only `models:/fraud-model@champion`, so a new "
-            "version can be promoted without any change in the service code.")
+    registry = f"{c['metrics_registry']} registry"
+    return (f"After the run, the {registry} has fraud-model with {NAMES[m['winner']]} as version {c['version']} with the alias champion, and the stored "
+            f"threshold is {m['threshold']:.4f}. At startup the prediction service resolves champion once, loads the "
+            "fixed numeric model version, and reads the threshold from that same version's run. This prevents a "
+            "concurrent promotion from mixing a model with another version's threshold. Restart the API after promotion to load it.")
 
 
 def g_latency(c):
@@ -170,29 +242,41 @@ def g_shots(c):
     w = c["m"]["winner"]
     rows = [
         ("Pipeline run", "pipeline_run", f"Output of the six-filter pipeline: {n(c['rows'])} rows read, {n(c['removed'])} duplicates removed, the 60/20/20 split, both models trained and {NAMES[w]} selected, with test recall {t['recall']:.3f} and FPR {t['fpr']:.4f}."),
-        ("MLflow", "mlflow", f"MLflow registry page of fraud-model. Version {c['version']} is registered and has the alias champion, which is the only model the service loads."),
-        ("FastAPI", "fastapi_docs", "The /docs page of the service with the GET /health and POST /predict endpoints, the request fields (Time, V1 to V28, Amount) and the response fields."),
-        ("Fraud test call", "test_fraud", f"A fraud row from the test set sent to /predict. The probability is {f['probability']:.4f}, is_fraud is {str(f['is_fraud']).lower()} and the answer came in {f['latency_ms']:.0f} ms."),
-        ("Genuine test call", "test_genuine", f"A genuine row from the test set. The probability is {g['probability']:.3f}, {'below' if g['probability'] < g['threshold'] else 'above'} the threshold {g['threshold']:.4f}, so is_fraud is {str(g['is_fraud']).lower()}."),
+        ("MLflow", "mlflow", f"Live {'Docker ' if c.get('live_docker') or docker_output(c['nb']) else ''}registry page of fraud-model. Version {c['docker_version'] or c['version']} is registered and has the alias champion."),
+        ("FastAPI", "fastapi_docs", f"The live {'Docker API ' if c.get('live_docker') or docker_output(c['nb']) else 'service '}/docs page with an executed GET /health response showing model version {c['docker_version'] or c['version']}, plus POST /predict request and response fields. The Swagger header's API release number is not the MLflow model version."),
+        ("Fraud test call", "test_fraud", f"A saved native notebook request, serving model version {f['model_version']}. The fraud probability is {f['probability']:.4f}, is_fraud is {str(f['is_fraud']).lower()} and the answer came in {f['latency_ms']:.0f} ms."),
+        ("Genuine test call", "test_genuine", f"A saved native notebook request, serving model version {g['model_version']}. The probability is {g['probability']:.3f}, {'below' if g['probability'] < g['threshold'] else 'above'} the threshold {g['threshold']:.4f}, so is_fraud is {str(g['is_fraud']).lower()}."),
         ("Prediction log", "prediction_log", f"The prediction log after the test calls and the 100 latency requests: {c['rows_logged']} rows, each with timestamp, request id, probability, label, latency and model version."),
     ]
-    dock = docker_output(c["nb"])
+    dock = c.get("live_docker") or docker_output(c["nb"])
     if dock:
-        ver = re.search(r"champion -> version (\d+)", dock)
         rows.append(("Docker Compose", "docker_compose",
-                     "The two microservices running as containers: registry (MLflow server, port 5000) and prediction-api "
-                     "(FastAPI, port 8000), both healthy. The API answers /health and /predict through the containers and "
-                     f"the registry reports fraud-model@champion as version {ver.group(1) if ver else c['version']}."))
+                     f"Live Compose status and {'live registry verification' if c.get('live_docker') else 'the saved Docker notebook checks'}: registry (container port 5000) and "
+                     "prediction-api (container port 8000), published on dynamically assigned localhost ports. "
+                     f"The Docker champion is version {c['docker_version']}; services remain running until manually stopped."))
+        rows.append(("Docker database", "docker_database",
+                     "Read-only SQLite inspection executed inside the registry container, showing the database file, "
+                     f"tables, model-version count, and champion model version {c['docker_version']}. /app/docker-mlflow.db persists in the bind-mounted project folder; "
+                     "SQLite is embedded in the registry, not a separate database-server container."))
     return "\n\n".join(f"**Screenshot {i} - {a}.** {e}\n\n![{a}](docs/screenshots/{b}.png)" for i, (a, b, e) in enumerate(rows, 1))
 
 
 def docker_output(nb):
     """Output of the Docker Compose cell, or "" when Docker was not available in the last run."""
     try:
-        out = cell_text(nb, "# Cell: build and start both containers")
+        out = cell_text(nb, ("# Cell: build and start both containers", "# Cell: train and serve inside Docker",
+                     "# Cell: train and start Docker services"))
     except SystemExit:
         return ""
-    return out if "prediction-api" in out else ""
+    return out if re.search(r"(?:Docker champion version:|champion -> version)\s*\d+", out) else ""
+
+
+def g_deployment(c):
+    for cell in c["nb"]["cells"]:
+        source = "".join(cell["source"])
+        if cell["cell_type"] == "markdown" and source.startswith("## 8. Containerised deployment"):
+            return source.partition("\n")[2].strip()
+    raise SystemExit("Docker deployment documentation is missing from the notebook.")
 
 
 def g_conclusion(c):
@@ -290,38 +374,18 @@ def g_fig_models(c):
 
 
 def g_fig_pr(c):
-    m, t = c["m"], c["m"]["test"]
     p, k = re.search(r"precision ([\d.]+), (\d+) genuine transactions flagged",
                      cell_text(c["nb"], "# Cell: draw the precision-recall curve")).groups()
     return fig(c, "# Cell: draw the precision-recall curve", 7, "Precision-recall curve on the test set",
-               f"The red point is the threshold chosen on validation ({m['threshold']:.3f}), which gives recall "
-               f"{t['recall']:.3f} and precision {t['precision']:.3f} on the test set. The dashed line is the 90% "
-               f"recall target. Reaching it on this test set would lower precision to {pct(float(p))}, with "
-               f"{n(int(k))} genuine transactions flagged instead of {n(t['fp'])}.")
-
-
-def code_appendix():
-    """All code of the notebook, grouped by file, for the printed report (Appendix A)."""
-    nb = json.loads(NB.read_text())
-    out, other = [], []
-    for c in nb["cells"]:
-        if c["cell_type"] != "code":
-            continue
-        src = "".join(c["source"])
-        if src.startswith("%%writefile"):
-            first, body = src.split("\n", 1)
-            name = first.replace('%%writefile', '').strip()
-            lang = {"yml": "yaml", "txt": "text", "dockerignore": "text"}.get(name.rsplit(".", 1)[-1], "python")
-            lang = "dockerfile" if name == "Dockerfile" else lang
-            out.append(f"#### {name}\n\n```{lang}\n{body.rstrip()}\n```\n")
-        else:
-            other.append(src.rstrip())
-    notebook_cells = "\n\n".join(f"# ---------- notebook cell {i} ----------\n{s}" for i, s in enumerate(other, 1))
-    return "\n".join(out) + f"\n#### Notebook cells (setup, data check, EDA, run, test calls)\n\n```python\n{notebook_cells}\n```\n"
+               "This is the saved notebook's frozen native-model curve, not a re-evaluation of the Docker model. "
+               "The red point uses its validation-selected threshold; the dashed line is the 90% recall target. "
+               f"Post-hoc analysis of this saved test set gives precision {pct(float(p))} at the recall target, "
+               f"with {n(int(k))} genuine transactions flagged. This analysis is not used to tune, serve or promote a model.")
 
 
 GEN = {"q1": g_q1, "results": g_results, "analytics": g_analytics, "registry": g_registry,
        "latency": g_latency, "goals": g_goals, "tests": g_tests, "shots": g_shots, "conclusion": g_conclusion,
+    "deployment": g_deployment,
        "fig_eda": g_fig_eda, "fig_hour": g_fig_hour, "fig_amount": g_fig_amount, "fig_features": g_fig_features,
        "fig_cm": g_fig_cm, "fig_models": g_fig_models, "fig_pr": g_fig_pr}
 
@@ -347,6 +411,32 @@ CSS = ("body{margin:0;padding:24px;background:#fff;font:15px/1.5 Menlo,Consolas,
 def page(title, body): return f"<html><style>{CSS}</style><body><h3>{title}</h3>{body}</body></html>"
 
 
+def pipeline_page(c):
+    stages = [line.strip() for line in c["pipe"].splitlines()
+              if re.match(r"^\s*\[[1-6]/6\s+\w+\]", line)]
+    if {int(line[1]) for line in stages} != set(range(1, 7)):
+        raise ValueError("Screenshot 1 requires saved output from all six pipeline stages.")
+    metrics = c["m"]
+    stage_output = html.escape("\n".join(stages))
+    registry = html.escape(c["metrics_registry"])
+    version = html.escape(str(metrics["model_version"]))
+    rows = "".join(
+        f"<tr><td>{label}</td><td>{metrics['val'][key]:.4f}</td>"
+        f"<td>{metrics['test'][key]:.4f}</td></tr>"
+        for label, key in (("Recall", "recall"), ("Precision", "precision"),
+                           ("PR-AUC", "pr_auc"), ("False-positive rate", "fpr")))
+    note = ("Current metrics verified against live Docker; saved stage output is historical."
+            if c.get("live_docker") else "Metrics match the saved registry evidence.")
+    return page("Pipeline run - six-filter output",
+                f"<pre>{stage_output}</pre><h3>Evaluation: {registry} registry, version {version}</h3>"
+                f"<p>Champion: {html.escape(NAMES[metrics['winner']])} | Threshold: {metrics['threshold']:.6f}</p>"
+                f"<table><thead><tr><th>Metric</th><th>Validation</th><th>Test</th></tr></thead>"
+                f"<tbody>{rows}</tbody></table>"
+                f"<p>Test recall target &gt;= 90%: {'PASS' if metrics['targets_met']['recall_ok'] else 'NOT MET'}. "
+                f"False-positive rate target &lt; 2%: {'PASS' if metrics['targets_met']['fpr_ok'] else 'NOT MET'}.</p>"
+                f"<p>{note}</p>")
+
+
 def wait_port(port, secs=60):
     for _ in range(secs):
         with socket.socket() as s:
@@ -354,6 +444,29 @@ def wait_port(port, secs=60):
                 return True
         time.sleep(1)
     raise SystemExit(f"nothing started on port {port}")
+
+
+def compose(*arguments):
+    return subprocess.run(["docker", "compose", "--ansi", "never", *arguments], cwd=ROOT,
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout
+
+
+def docker_url(service, port):
+    binding = compose("port", service, str(port)).strip()
+    if not re.fullmatch(r"127\.0\.0\.1:\d+", binding):
+        raise SystemExit(f"Unexpected Docker address for {service}: {binding!r}")
+    return f"http://{binding}"
+
+
+def read_json(url):
+    with urlopen(url, timeout=15) as response:
+        return json.load(response)
+
+
+def available_port():
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return listener.getsockname()[1]
 
 
 def chromium(p):
@@ -365,30 +478,67 @@ def take_shots(c):
     from playwright.sync_api import sync_playwright
     SHOTS.mkdir(parents=True, exist_ok=True)
     nb = c["nb"]
-    clean = lambda t: "".join(l + "\n" for l in t.replace("\n\n", "\n").splitlines() if "INFO mlflow" not in l)
-    res = cell_text(nb, "# Cell: read artifacts/metrics.json")
     calls = cell_text(nb, "# Cell: send one fraud row").split("--- ")
     pages = {
-        "pipeline_run": page("Pipeline run (13.ipynb)", f"<pre>{html.escape(clean(c['pipe']))}</pre><pre>{html.escape(res)}</pre>"),
+        "pipeline_run": pipeline_page(c),
         "test_fraud": page("POST /predict - fraud transaction", f"<pre>{html.escape('--- ' + calls[1])}</pre>"),
         "test_genuine": page("POST /predict - genuine transaction", f"<pre>{html.escape('--- ' + calls[2])}</pre>"),
         "prediction_log": page("Prediction log (predictions_log.csv)", f"<pre>{html.escape(cell_text(nb, 'Rows logged'))}</pre>{cell_html(nb, 'Rows logged')}"),
     }
-    if docker_output(nb):
-        pages["docker_compose"] = page("docker compose up: registry + prediction-api", f"<pre>{html.escape(docker_output(nb))}</pre>")
     env = {**os.environ, "MLFLOW_DISABLE_AGENT_HINT": "1"}
-    mlflow = subprocess.Popen([sys.executable, "-m", "mlflow", "server", "--backend-store-uri", f"sqlite:///{ROOT / 'mlflow.db'}", "--port", "5055"],
-                              cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    api = subprocess.Popen([sys.executable, "-m", "uvicorn", "api.main:app", "--port", "8000"],
-                           cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    processes = []
     try:
-        wait_port(5055); wait_port(8000)
+        if c.get("live_docker") or docker_output(nb):
+            api_url = docker_url("prediction-api", 8000)
+            registry_url = docker_url("registry", 5000)
+            health = read_json(f"{api_url}/health")
+            champion = read_json(f"{registry_url}/api/2.0/mlflow/registered-models/alias?name=fraud-model&alias=champion")
+            if str(health["model_version"]) != c["docker_version"] or str(champion["model_version"]["version"]) != c["docker_version"]:
+                raise SystemExit("Live Docker and saved notebook versions differ. Save the latest notebook before rebuilding the report.")
+            expected_threshold = c["docker_health"]["threshold"] if c["docker_health"] else c["m"]["threshold"]
+            if health["threshold"] != expected_threshold:
+                raise SystemExit("Live Docker and evaluation thresholds differ. Regenerate matching training evidence before building the report.")
+            status = compose("ps")
+            verification = "\n".join(line for line in docker_output(nb).splitlines() if line.startswith(
+                ("Docker API docs:", "Docker registry:", "Health:", "Prediction:", "Docker champion version:",
+                 "Registry SQLite database:", "Services remain running", "champion -> version")))
+            verification = c.get("live_docker") or verification
+            pages["docker_compose"] = page("Docker Compose: live status and registry verification" if c.get("live_docker") else "Docker Compose: live status and saved notebook verification",
+                                            f"<pre>{html.escape(status)}</pre><pre>{html.escape(verification)}</pre>")
+            inspection = ("import json, sqlite3; from pathlib import Path; "
+                          "database=Path('/app/docker-mlflow.db'); "
+                          "connection=sqlite3.connect('file:/app/docker-mlflow.db?mode=ro', uri=True); "
+                          "print(json.dumps({'database':str(database), 'size_bytes':database.stat().st_size, "
+                          "'tables':[row[0] for row in connection.execute(\"SELECT name FROM sqlite_master WHERE type='table' "
+                          "AND name IN ('experiments','runs','registered_models','model_versions','registered_model_aliases') ORDER BY name\")], "
+                          "'model_versions':connection.execute('SELECT COUNT(*) FROM model_versions').fetchone()[0], "
+                          "'champion_model_version':connection.execute(\"SELECT version FROM registered_model_aliases "
+                          "WHERE name='fraud-model' AND alias='champion'\").fetchone()[0]}, indent=2))")
+            database = json.loads(compose("exec", "-T", "registry", "python", "-c", inspection))
+            if str(database["champion_model_version"]) != c["docker_version"]:
+                raise SystemExit("The SQLite champion changed during screenshot capture; rerun the report.")
+            pages["docker_database"] = page("Docker registry: persistent SQLite database (read-only inspection)",
+                                             f"<pre>{html.escape(json.dumps(database, indent=2))}</pre>")
+        else:
+            registry_port, api_port = available_port(), available_port()
+            processes.append(subprocess.Popen([sys.executable, "-m", "mlflow", "server", "--backend-store-uri",
+                                                f"sqlite:///{ROOT / 'mlflow.db'}", "--host", "127.0.0.1", "--port", str(registry_port)],
+                                               cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            processes.append(subprocess.Popen([sys.executable, "-m", "uvicorn", "api.main:app", "--host", "127.0.0.1", "--port", str(api_port)],
+                                               cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            wait_port(registry_port); wait_port(api_port)
+            api_url, registry_url = f"http://127.0.0.1:{api_port}", f"http://127.0.0.1:{registry_port}"
         with sync_playwright() as p:
             b = chromium(p)
+            context = b.new_context(viewport={"width": 1100, "height": 400}, device_scale_factor=2)
+            pg = context.new_page()
+            pg.set_default_timeout(30000)
+            pg.set_default_navigation_timeout(30000)
             for name, h in pages.items():
-                pg = b.new_page(viewport={"width": 1100, "height": 400}, device_scale_factor=2)
-                pg.set_content(h); pg.screenshot(path=str(SHOTS / f"{name}.png"), full_page=True); pg.close()
-            pg = b.new_page(viewport={"width": 1200, "height": 800}, device_scale_factor=2)
+                print(f"Capturing screenshot: {name}", flush=True)
+                pg.set_content(h); pg.screenshot(path=str(SHOTS / f"{name}.png"), full_page=True)
+            print("Capturing screenshot: FastAPI docs", flush=True)
+            pg.set_viewport_size({"width": 1200, "height": 800})
             sw = os.environ.get("SWAGGER_DIST")            # only needed when the CDN is blocked
             if sw:
                 def route(r):
@@ -398,15 +548,27 @@ def take_shots(c):
                     elif "favicon" in u: r.abort()
                     else: r.continue_()
                 pg.route("**/*", route)
-            pg.goto("http://localhost:8000/docs"); pg.wait_for_selector(".opblock", timeout=20000)
+            pg.goto(f"{api_url}/docs"); pg.wait_for_selector(".opblock", timeout=30000)
             for blk in pg.locator(".opblock-summary").all(): blk.click()
-            pg.wait_for_timeout(1000); pg.screenshot(path=str(SHOTS / "fastapi_docs.png"), full_page=True); pg.close()
-            pg = b.new_page(viewport={"width": 1280, "height": 800}, device_scale_factor=2)
+            health_block = pg.locator(".opblock-get:has(.opblock-summary-path[data-path='/health'])")
+            health_block.get_by_role("button", name="Try it out", exact=True).click()
+            with pg.expect_response(f"{api_url}/health") as executed_health:
+                health_block.get_by_role("button", name="Execute", exact=True).click()
+            response = executed_health.value
+            served = response.json()
+            if (response.status != 200 or served["status"] != "ok"
+                    or str(served["model_version"]) != str(c["version"])
+                    or served["threshold"] != c["m"]["threshold"]):
+                raise SystemExit("Swagger's live health response does not match the verified report model.")
+            health_block.locator(".live-responses-table").wait_for()
+            pg.screenshot(path=str(SHOTS / "fastapi_docs.png"), full_page=True)
+            print("Capturing screenshot: MLflow registry", flush=True)
+            pg.set_viewport_size({"width": 1280, "height": 800})
             # The MLflow page is a JavaScript app: wait until the model name is really on the screen
             # (a fixed sleep gave a blank picture on a slower start), and retry with a reload if needed.
             ok = False
             for _ in range(3):
-                pg.goto("http://localhost:5055/#/models/fraud-model")
+                pg.goto(f"{registry_url}/#/models/fraud-model")
                 try:
                     pg.wait_for_selector("text=Registered Models", timeout=30000)
                     pg.wait_for_selector("text=champion", timeout=30000)
@@ -416,14 +578,15 @@ def take_shots(c):
                     pg.reload()
             try: pg.get_by_role("button", name="Close").first.click(timeout=2000)   # close the assistant panel if it is open
             except Exception: pass
-            pg.wait_for_timeout(800)
             pg.screenshot(path=str(SHOTS / "mlflow.png"))
             if not ok:
-                print("WARNING: the MLflow page did not load fully, check docs/screenshots/mlflow.png")
+                raise RuntimeError("MLflow did not render its registry and champion; refusing to publish an incomplete report.")
             b.close()
         print("screenshots saved in docs/screenshots/")
     finally:
-        mlflow.terminate(); api.terminate()
+        for process in processes:
+            process.terminate()
+            process.wait(timeout=15)
 
 
 # ---------------------------------------------------------------- PDF --------------------------
@@ -431,7 +594,6 @@ def make_pdf():
     import markdown
     from playwright.sync_api import sync_playwright
     text = MD.read_text(encoding="utf-8")
-    text = text.replace("<!--APPENDIX_CODE-->", code_appendix())                      # full code only in the printed report
     text = re.sub(r"<!--(?!A:|/A:).*?-->", "", text, flags=re.S)                 # hide author comments
     text = re.sub(r"```mermaid\n(.*?)```", lambda m: f'<pre class="mermaid">{html.escape(m.group(1))}</pre>', text, flags=re.S)
     body = markdown.markdown(text, extensions=["tables", "fenced_code", "sane_lists"])
@@ -450,7 +612,10 @@ def make_pdf():
                    encoding="utf-8")
     with sync_playwright() as p:
         b = chromium(p); pg = b.new_page()
-        pg.goto(out.as_uri()); pg.wait_for_load_state("networkidle"); pg.wait_for_timeout(3000)
+        pg.goto(out.as_uri()); pg.wait_for_load_state("networkidle")
+        pg.wait_for_function("Array.from(document.querySelectorAll('pre.mermaid')).every(node => node.querySelector('svg'))", timeout=30000)
+        pg.wait_for_function("Array.from(document.images).every(image => image.complete && image.naturalWidth > 0)", timeout=30000)
+        pg.evaluate("document.fonts.ready")
         pg.pdf(path=str(ROOT / "13.pdf"), format="A4", margin={"top": "15mm", "bottom": "15mm", "left": "14mm", "right": "14mm"},
                print_background=True)
         b.close()
@@ -463,6 +628,6 @@ if __name__ == "__main__":
     ap.add_argument("--no-shots", action="store_true"); ap.add_argument("--no-pdf", action="store_true")
     a = ap.parse_args()
     ctx = collect()
-    update_md(ctx)
     if not a.no_shots: take_shots(ctx)
+    update_md(ctx)
     if not a.no_pdf: make_pdf()

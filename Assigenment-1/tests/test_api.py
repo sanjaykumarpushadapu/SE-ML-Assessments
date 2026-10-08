@@ -104,8 +104,8 @@ def test_BR008_log_failure_is_an_error_not_silent(monkeypatch, tiny_model, tmp_p
 
 # ---- BR-009 ----------------------------------------------------------------------------
 def test_BR009_loads_only_the_champion_alias(monkeypatch):
-    """The API must load models:/fraud-model@champion and take the threshold from that model's run."""
-    seen = {}
+    """Resolve champion once; a concurrent promotion cannot change the loaded version."""
+    seen = {"alias_calls": 0, "promoted": False}
 
     class FakeMV:
         version = 3
@@ -117,18 +117,27 @@ def test_BR009_loads_only_the_champion_alias(monkeypatch):
 
     class FakeClient:
         def get_model_version_by_alias(self, name, alias):
+            seen["alias_calls"] += 1
+            assert not seen["promoted"]
             seen["alias"] = (name, alias)
             return FakeMV()
 
         def get_run(self, run_id):
+            assert run_id == "abc"
             return FakeRun()
 
-    monkeypatch.setattr("mlflow.sklearn.load_model",
-                        lambda uri: seen.setdefault("uri", uri) or "model")
+    def load_model(uri):
+        assert seen["alias_calls"] == 1
+        seen["uri"] = uri
+        seen["promoted"] = True
+        return "model3"
+
+    monkeypatch.setattr("mlflow.sklearn.load_model", load_model)
     monkeypatch.setattr(api_main, "MlflowClient", FakeClient)
-    _, version, threshold = api_main.load_champion()
-    assert seen["uri"] == "models:/fraud-model@champion"
+    model, version, threshold = api_main.load_champion()
+    assert seen["uri"] == "models:/fraud-model/3"
     assert seen["alias"] == ("fraud-model", "champion")
+    assert seen["alias_calls"] == 1 and model == "model3"
     assert (version, threshold) == ("3", 0.25)
 
 

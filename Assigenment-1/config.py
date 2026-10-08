@@ -15,10 +15,11 @@ DATA_PATH = ROOT / "data" / "creditcard.csv"
 ARTIFACTS_DIR = ROOT / "artifacts"       # metrics.json and sample requests are saved here
 LOG_PATH = ROOT / "predictions_log.csv"  # written by log_prediction() on every API call
 
-# MLflow keeps its runs in a local SQLite file; model files go to the mlruns folder.
+# Native MLflow uses local SQLite and mlruns-native; Docker overrides both storage settings.
 # In Docker Compose the API reaches the registry service over HTTP instead (MLFLOW_TRACKING_URI, Section 8).
 TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", f"sqlite:///{ROOT / 'mlflow.db'}")
-ARTIFACT_ROOT = (ROOT / "mlruns").as_uri()
+ARTIFACT_DIR = Path(os.environ.get("MLFLOW_ARTIFACT_DIR", str(ROOT / "mlruns-native"))).resolve()
+ARTIFACT_ROOT = ARTIFACT_DIR.as_uri()
 EXPERIMENT = "fraud-detection"
 MODEL_NAME = "fraud-model"  # name in the model registry
 ALIAS = "champion"          # the API only ever loads the model that has this alias (BR-009)

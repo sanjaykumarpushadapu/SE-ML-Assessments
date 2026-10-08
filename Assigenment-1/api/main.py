@@ -40,13 +40,14 @@ def load_champion():
     """Load models:/fraud-model@champion, its version and its threshold (BR-002, BR-009)."""
     mlflow.set_tracking_uri(config.TRACKING_URI)
     # Only the registered model with the champion alias is served, never a file or a run.
-    model = mlflow.sklearn.load_model(f"models:/{config.MODEL_NAME}@{config.ALIAS}")
     client = MlflowClient()
     mv = client.get_model_version_by_alias(config.MODEL_NAME, config.ALIAS)
+    version = str(mv.version)
+    model = mlflow.sklearn.load_model(f"models:/{config.MODEL_NAME}/{version}")
     # The threshold was chosen during evaluation and stored as a run parameter,
     # so the service reads it instead of having its own copy.
     threshold = float(client.get_run(mv.run_id).data.params["threshold"])
-    return model, str(mv.version), threshold
+    return model, version, threshold
 
 
 @asynccontextmanager
