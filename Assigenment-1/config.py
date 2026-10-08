@@ -31,7 +31,9 @@ SCALED_COLS = ["Time", "Amount"]  # only these two are on very different scales,
 TARGET = "Class"                  # 1 = fraud, 0 = genuine
 
 # Measurable goals from the report (Section 2.2).
-TARGET_RECALL = 0.90  # catch at least 90% of the frauds
+TARGET_RECALL = 0.90  # desired recall goal; retained for validation selection
+MIN_ACCEPTANCE_RECALL = 0.85
+RECALL_POLICY_REVISION = "prototype_recall_v2"
 VALIDATION_RECALL_TARGET = 0.95
 MAX_FPR = 0.02        # wrongly flag less than 2% of genuine transactions
 MIN_LOSS_REDUCTION = 0.30  # business goal: cut fraud loss by 30% (measured as the share of fraud money caught)

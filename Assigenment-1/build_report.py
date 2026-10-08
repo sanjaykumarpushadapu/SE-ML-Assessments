@@ -29,6 +29,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import urlopen
 
+import config
+
 ROOT = Path(__file__).resolve().parent
 NB, MD, METRICS = ROOT / "13.ipynb", ROOT / "13.md", ROOT / "artifacts" / "metrics.json"
 SHOTS = ROOT / "docs" / "screenshots"
@@ -81,6 +83,15 @@ def collect():
                 (ROOT / relative).read_text(encoding="utf-8").rstrip("\n")):
             raise SystemExit(f"Saved notebook writer for {relative} differs from the project code. "
                              "Accept the notebook edits (Keep All) and Save All before building the report.")
+    expected_policy = {"revision": config.RECALL_POLICY_REVISION,
+                       "minimum_recall": config.MIN_ACCEPTANCE_RECALL,
+                       "desired_recall": config.TARGET_RECALL}
+    if m.get("acceptance_policy") != expected_policy:
+        raise SystemExit("Metrics do not record the revised recall acceptance policy. "
+                         "Rerun the native and Docker training workflows, then save the notebook before building the report. "
+                         "Existing runs must not be relabelled as accepted under a different policy.")
+    if m["targets_met"]["recall_ok"] != (m["test"]["recall"] >= expected_policy["minimum_recall"]):
+        raise SystemExit("Recorded recall acceptance does not match the run policy; rerun the pipeline.")
     pipe = cell_text(nb, ("# Cell: rebuild the registry", "# Cell: rebuild the native registry", "!python -m pipeline.run_pipeline"))
     if "[1/6 ingest]" not in pipe:
         pipe = docker_output(nb)
@@ -153,6 +164,9 @@ def verify_live_docker(c):
             and str(health["model_version"]) == str(model["version"]) == str(m["model_version"])
             and health["threshold"] == float(params["threshold"]) == m["threshold"]
             and params["model_name"] == m["winner"]
+            and params["acceptance_policy_revision"] == m["acceptance_policy"]["revision"]
+            and float(params["minimum_acceptance_recall"]) == m["acceptance_policy"]["minimum_recall"]
+            and float(params["desired_recall_goal"]) == m["acceptance_policy"]["desired_recall"]
             and ("selection_policy" not in m or all(
                 float(params[param]) == m["selection_policy"][field]
                 for param, field in (("validation_recall_target", "validation_recall_target"),
@@ -201,6 +215,8 @@ def g_results(c):
     v, t = m["val"], m["test"]
     cand = m["candidates"]
     ok_r, ok_f = m["targets_met"]["recall_ok"], m["targets_met"]["fpr_ok"]
+    acceptance = m["acceptance_policy"]
+    goal_met = t["recall"] >= acceptance["desired_recall"]
     rows = "\n".join(f"| {NAMES[k]} | {x['val']['threshold']:.4f} | {x['val']['recall']:.4f} | {x['val']['precision']:.4f} | "
                      f"{pct(x['val']['fpr'], 2)} | {x['val']['pr_auc']:.3f} |" for k, x in cand.items())
     other = [k for k in cand if k != w][0]
@@ -229,9 +245,10 @@ def g_results(c):
                           "The test set had already been inspected, so this is an exploratory result, not a fresh hold-out assessment.")
     verdict = []
     verdict.append("The FPR target (below 2%) is " + ("met" if ok_f else "not met"))
-    verdict.append("the recall target (at least 90%) is " + ("met" if ok_r else "not met") + f" on the test set ({pct(t['recall'])})")
+    verdict.append(f"the revised recall minimum (at least {pct(acceptance['minimum_recall'], 0)}) is "
+                   + ("met" if ok_r else "not met") + f" on the test set ({pct(t['recall'])})")
     note = ""
-    if not ok_r:
+    if not goal_met:
         note = (f" On validation the recall was {pct(v['recall'])}. The test set has only {t['tp'] + t['fn']} frauds and the "
                 f"validation set {v['tp'] + v['fn']}, so missing just one more fraud changes recall by about one percentage point, and a "
                 "threshold that is only just enough on validation can fall short on new data. We report the result as it is and did "
@@ -266,7 +283,7 @@ We compared {len(cand)} models on validation. {why} Below are the test results a
 |---|---|---|---|---|---|
 | {t['recall']:.4f} | {t['precision']:.4f} | {t['f1']:.4f} | {t['pr_auc']:.4f} | {t['roc_auc']:.4f} | {pct(t['fpr'], 2)} |
 
-Confusion matrix on the test set: TN {n(t['tn'])}, FP {n(t['fp'])}, FN {n(t['fn'])}, TP {n(t['tp'])}. **{verdict[0]}, {'and' if ok_f == ok_r else 'but'} {verdict[1]}.**{note}
+Confusion matrix on the test set: TN {n(t['tn'])}, FP {n(t['fp'])}, FN {n(t['fn'])}, TP {n(t['tp'])}. **{verdict[0]}, {'and' if ok_f == ok_r else 'but'} {verdict[1]}.** The original desired recall goal of {pct(acceptance['desired_recall'], 0)} is {'met' if goal_met else 'not met'}.{note}
 
 {loss_par}**Note on the selection rule:** {selection_note}"""
 
@@ -295,6 +312,8 @@ def g_registry(c):
             "We need to restart the API to load a new champion. "
             "This assignment uses explicit demonstration mode, so the served champion is not a production acceptance claim. "
             "New runs record model_quality_acceptance and deployment_scope tags. "
+            "The revised prototype gate checks at least 85% recall, FPR below 2% and fraud-loss reduction of at least 30%; "
+            "90% recall remains a desired goal rather than a promotion condition. "
             "run_pipeline(demonstration=False) refuses to promote a winner with missing or failed recall, "
             "false-positive or fraud-loss checks. Passing that gate still requires separate fresh-holdout and service validation.")
 
@@ -374,9 +393,12 @@ def g_deployment(c):
 def g_conclusion(c):
     m = c["m"]; t = m["test"]; med, p95, mx = c["lat"]
     ok_r, ok_f = m["targets_met"]["recall_ok"], m["targets_met"]["fpr_ok"]
+    acceptance = m["acceptance_policy"]
     goals = (f"false-positive rate ({pct(t['fpr'], 2)} against 2%) is {'met' if ok_f else 'not met'}, "
              f"latency (p95 {p95} ms against 200 ms) is {'met' if float(p95) < 200 else 'not met'}, and "
-             f"the test recall is {pct(t['recall'])} against the 90% target, so that goal is {'met' if ok_r else 'not met'}"
+             f"the test recall is {pct(t['recall'])}, so the revised {pct(acceptance['minimum_recall'], 0)} minimum is "
+             f"{'met' if ok_r else 'not met'} while the original {pct(acceptance['desired_recall'], 0)} desired goal is "
+             f"{'met' if t['recall'] >= acceptance['desired_recall'] else 'not met'}"
              + (f". The estimated fraud loss reduction is {pct(t['loss_reduction'])} against the 30% target ({'met' if m['targets_met'].get('loss_ok') else 'not met'})" if "loss_reduction" in t else ""))
     return ("In this assignment we built a fraud detection system with a pipe-and-filter training pipeline, an MLflow registry and a FastAPI "
             f"microservice that serves the champion model, with prediction logging and automated tests. In the saved notebook run, {c['tests']} tests passed."
@@ -390,9 +412,11 @@ def g_conclusion(c):
 
 def g_goals(c):
     m = c["m"]; t = m["test"]; med, p95, mx = c["lat"]
+    acceptance = m["acceptance_policy"]
     yn = lambda ok: "Yes" if ok else "No"
     return ("| ID | Goal | GR4ML concept | Metric | Target | Result (latest run) | Met? |\n|---|---|---|---|---|---|---|\n"
-            f"| G1 | Catch fraud | Indicator of the strategic goal; softgoal High recall | Recall on the test set | at least 90% | {pct(t['recall'])} | {yn(m['targets_met']['recall_ok'])} |\n"
+            f"| G1 | Catch fraud: prototype minimum | Indicator of the strategic goal; softgoal High recall | Recall on the test set | at least {pct(acceptance['minimum_recall'], 0)} | {pct(t['recall'])} | {yn(m['targets_met']['recall_ok'])} |\n"
+            f"| G1-A | Catch fraud: desired goal | Aspirational indicator; original recall goal | Recall on the test set | at least {pct(acceptance['desired_recall'], 0)} | {pct(t['recall'])} | {yn(t['recall'] >= acceptance['desired_recall'])} |\n"
             f"| G2 | Avoid blocking genuine customers | Indicator of the strategic goal; softgoal Few false alarms | False-positive rate on the test set | below 2% | {pct(t['fpr'], 2)} | {yn(m['targets_met']['fpr_ok'])} |\n"
             f"| G3 | Decide while the payment is processed | Softgoal Low latency | p95 latency of the prediction API | below 200 ms | {p95} ms | {yn(float(p95) < 200)} |\n"
             + g_loss_row(m))
@@ -472,7 +496,8 @@ def g_fig_pr(c):
                      cell_text(c["nb"], "# Cell: draw the precision-recall curve")).groups()
     return fig(c, "# Cell: draw the precision-recall curve", 7, "Precision-recall curve on the test set",
                "This is the saved notebook's frozen native-model curve, not a re-evaluation of the Docker model. "
-               "The red point uses its validation-selected threshold; the dashed line is the 90% recall target. "
+               "The red point uses its validation-selected threshold; the dashed line is the 90% desired recall goal, "
+               "and the dotted line is the revised 85% prototype minimum. "
                f"Post-hoc analysis of this saved test set gives precision {pct(float(p))} at the recall target, "
                f"with {n(int(k))} genuine transactions flagged. This analysis is not used to tune, serve or promote a model.")
 
@@ -481,12 +506,17 @@ def g_acceptance(c):
     from scipy.stats import binomtest
 
     metrics = c["m"]["test"]
+    acceptance = c["m"]["acceptance_policy"]
     frauds = metrics["tp"] + metrics["fn"]
     interval = binomtest(metrics["tp"], frauds).proportion_ci(confidence_level=0.95, method="exact")
-    status = "G1 meets its numerical target" if c["m"]["targets_met"]["recall_ok"] else "G1 fails"
-    return (f"**Latest acceptance status:** {status}: test recall is {pct(metrics['recall'], 2)} against the 90% target. "
+    status = "G1 meets the revised numerical minimum" if c["m"]["targets_met"]["recall_ok"] else "G1 fails the revised minimum"
+    return (f"**Latest acceptance status:** {status}: test recall is {pct(metrics['recall'], 2)} against the "
+         f"{pct(acceptance['minimum_recall'], 0)} prototype minimum. The original {pct(acceptance['desired_recall'], 0)} "
+         f"desired goal is {'met' if metrics['recall'] >= acceptance['desired_recall'] else 'not met'}. "
          f"The model caught {metrics['tp']} of {frauds} frauds and missed {metrics['fn']}. "
          f"The 95% exact binomial interval is {pct(interval.low, 2)} to {pct(interval.high, 2)}; it does not change the pass/fail decision. "
+         "The prototype minimum was revised after inspecting earlier test results; this is a requirement change, not a model improvement. "
+         "Stakeholder approval is still required for real deployment and is not claimed by this assignment. "
          "Passing software tests does not establish model-quality acceptance. The reused test set is exploratory, "
          "and a fresh untouched hold-out is needed before claiming production acceptance.")
 

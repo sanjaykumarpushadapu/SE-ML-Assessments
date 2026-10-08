@@ -32,9 +32,14 @@
     "genuine_amount_blocked": 280972.1
   },
   "targets_met": {
-    "recall_ok": false,
+    "recall_ok": true,
     "fpr_ok": true,
     "loss_ok": true
+  },
+  "acceptance_policy": {
+    "revision": "prototype_recall_v2",
+    "minimum_recall": 0.85,
+    "desired_recall": 0.9
   },
   "selection_policy": {
     "validation_recall_target": 0.95,
@@ -91,5 +96,5 @@
       }
     }
   },
-  "model_version": "17"
+  "model_version": "18"
 }

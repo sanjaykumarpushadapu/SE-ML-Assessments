@@ -38,7 +38,10 @@ def log_candidate(name: str, model, X_example, threshold: float, val_metrics: di
         mlflow.log_param("threshold", threshold)
         mlflow.log_params({"validation_recall_target": config.VALIDATION_RECALL_TARGET,
                            "minimum_validation_recall": config.TARGET_RECALL,
-                           "max_validation_fpr": config.MAX_FPR})
+                           "max_validation_fpr": config.MAX_FPR,
+                           "minimum_acceptance_recall": config.MIN_ACCEPTANCE_RECALL,
+                           "desired_recall_goal": config.TARGET_RECALL,
+                           "acceptance_policy_revision": config.RECALL_POLICY_REVISION})
         mlflow.log_params({f"clf__{key}": value for key, value in model.named_steps["clf"].get_params().items()})
         # Metrics: what came out (counts such as tn/fp are left out of the metric table).
         mlflow.log_metrics({f"val_{k}": v for k, v in val_metrics.items()

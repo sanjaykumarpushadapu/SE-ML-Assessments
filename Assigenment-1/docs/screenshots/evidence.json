@@ -1,57 +1,57 @@
 {
   "source": "Docker",
-  "model_version": "17",
-  "run_id": "c6e49942bdff472eb4b5adb9f9e6ebfd",
+  "model_version": "18",
+  "run_id": "a8f5d26c6630435dbf05f46830b345de",
   "threshold": 0.022606854478447718,
   "calls": {
     "fraud": {
-      "request_id": "7bb8cc06-cca2-4dee-98ca-f64e9ac1c260",
+      "request_id": "7af11954-c6de-4abe-b7ca-ee5f4350997e",
       "probability": 0.9994017368367172,
       "is_fraud": true,
       "threshold": 0.022606854478447718,
-      "model_version": "17",
-      "latency_ms": 22.16
+      "model_version": "18",
+      "latency_ms": 49.355
     },
     "genuine": {
-      "request_id": "0b26a392-0afa-4caa-bd51-97371fc06c4e",
+      "request_id": "12fcda1b-87e1-4e51-85d6-e76649ac29f2",
       "probability": 0.00030342745551724734,
       "is_fraud": false,
       "threshold": 0.022606854478447718,
-      "model_version": "17",
-      "latency_ms": 8.413
+      "model_version": "18",
+      "latency_ms": 185.231
     }
   },
   "log": {
     "path": "/app/predictions_log.csv",
-    "total_rows": 963,
+    "total_rows": 1069,
     "rows": [
       {
-        "timestamp": "2026-10-08T11:20:47.386103+00:00",
-        "request_id": "7bb8cc06-cca2-4dee-98ca-f64e9ac1c260",
+        "timestamp": "2026-10-08T11:33:47.659400+00:00",
+        "request_id": "7af11954-c6de-4abe-b7ca-ee5f4350997e",
         "probability": "0.999402",
         "is_fraud": "1",
-        "latency_ms": "22.16",
-        "model_version": "17"
+        "latency_ms": "49.355",
+        "model_version": "18"
       },
       {
-        "timestamp": "2026-10-08T11:20:47.773297+00:00",
-        "request_id": "0b26a392-0afa-4caa-bd51-97371fc06c4e",
+        "timestamp": "2026-10-08T11:33:48.287150+00:00",
+        "request_id": "12fcda1b-87e1-4e51-85d6-e76649ac29f2",
         "probability": "0.000303",
         "is_fraud": "0",
-        "latency_ms": "8.413",
-        "model_version": "17"
+        "latency_ms": "185.231",
+        "model_version": "18"
       }
     ]
   },
-  "captured_at": "2026-10-08T11:20:50.339073+00:00",
+  "captured_at": "2026-10-08T11:33:51.239913+00:00",
   "images": {
-    "pipeline_run": "a0e85e648ed143d6a26a1f661e35c1ce503a311b7cc63bc3ddc44f39fb624c59",
-    "docker_compose": "e94f03a7002ceec809287c5980cece92039c95b846a300c3b1383ae2e6c2687e",
-    "docker_database": "76fad66df9b5b93903989871ef5743fdbb7c1e7d6f07a1623c597e27a154b3ad",
-    "test_fraud": "417015cfe071e50a50782b5ba3e90766f07098d12bba5fd0ca4ae59fcae274d4",
-    "test_genuine": "d1e5a9d2e3f7ee4d9fdf2c6c7740c6b94013fc92a3ded29750e7ba94d452316c",
-    "prediction_log": "4539a8893d7a63b1605704ce0feb923d8d5f1045298a9be825314cb0defa7d16",
-    "fastapi_docs": "cea1e94247f0d0e59ae0b4eaf12bc6c1a8b9ad196bc761b7128a02094a0331a7",
-    "mlflow": "cd990f5b80d84af23c5c287dd135180df242e5489b523761d81966639dfe248f"
+    "pipeline_run": "81a29bf44fa3c7b31d70dddb6b75048845f38e27c892a6e75be68418428db33d",
+    "docker_compose": "c69804418d9bad10fdac0251413cc08e3df3f667e4e6464aee9b5a947d13daf0",
+    "docker_database": "953be4e33ec74ac7fe8736bd928ee429b2f30b6099dad2e55ecc88150c487be8",
+    "test_fraud": "657b4674f5cd7e243f88a616a40229634a3fe5e52d2c9b10c46a123f6f12f13e",
+    "test_genuine": "f0a17548ebbbc6c024798678981de0f384c8807dab68a0a5e7d5199204694113",
+    "prediction_log": "63e61480fa257594b3f68ea8588d105dc5564acef14a66f945b77969f743b9e0",
+    "fastapi_docs": "a43f162ed74a0cfe5695d8e1b205c6fbc96851c6a322dbed590a6903f3aab2de",
+    "mlflow": "b339eb7cfef1b82c1b90b42014cc832cdae70807d056b52eb724dcf410b55993"
   }
 }

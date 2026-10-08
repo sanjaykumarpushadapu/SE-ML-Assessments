@@ -65,11 +65,16 @@ def run_pipeline(data_path=config.DATA_PATH, candidates=CANDIDATES, track: bool 
     log.info("[6/6 evaluate] winner=%s test recall=%.3f precision=%.3f f1=%.3f pr_auc=%.4f fpr=%.4f",
              winner, test_m["recall"], test_m["precision"], test_m["f1"], test_m["pr_auc"],
              test_m["fpr"])
-    log.info("Targets on test set: recall>=%.2f -> %s, fpr<%.2f -> %s", config.TARGET_RECALL,
+    log.info("Minimum acceptance on test set: recall>=%.2f -> %s, fpr<%.2f -> %s", config.MIN_ACCEPTANCE_RECALL,
              checks["recall_ok"], config.MAX_FPR, checks["fpr_ok"])
+    log.info("Desired recall goal: recall>=%.2f -> %s", config.TARGET_RECALL,
+             test_m["recall"] >= config.TARGET_RECALL)
 
     result = {"winner": winner, "threshold": threshold, "val": val_m, "test": test_m,
               "targets_met": checks,
+              "acceptance_policy": {"revision": config.RECALL_POLICY_REVISION,
+                                    "minimum_recall": config.MIN_ACCEPTANCE_RECALL,
+                                    "desired_recall": config.TARGET_RECALL},
               "selection_policy": {"validation_recall_target": config.VALIDATION_RECALL_TARGET,
                                    "minimum_recall": config.TARGET_RECALL, "max_fpr": config.MAX_FPR},
               "candidates": {n: {"threshold": t, "val": m} for n, (_, t, m) in fitted.items()}}

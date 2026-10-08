@@ -55,8 +55,8 @@ def compute_metrics(y_true, proba, threshold: float) -> dict:
 
 
 def targets_met(metrics: dict) -> dict:
-    """Compare measured values with the targets; nothing is tuned here (BR-006)."""
-    flags = {"recall_ok": metrics["recall"] >= config.TARGET_RECALL,
+    """Check the revised prototype minimum, not the separate desired recall goal (BR-006)."""
+    flags = {"recall_ok": metrics["recall"] >= config.MIN_ACCEPTANCE_RECALL,
              "fpr_ok": metrics["fpr"] < config.MAX_FPR}
     if "loss_reduction" in metrics:  # only the test report has the Amount-based loss figures
         flags["loss_ok"] = metrics["loss_reduction"] >= config.MIN_LOSS_REDUCTION

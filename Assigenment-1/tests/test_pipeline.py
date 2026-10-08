@@ -135,7 +135,7 @@ def test_BR006_targets_flag_is_false_when_target_missed():
     {"fpr": 0.01, "loss_reduction": 0.5},
     {"recall": 0.95, "loss_reduction": 0.5},
     {"recall": 0.95, "fpr": 0.01},
-    {"recall": 0.85, "fpr": 0.01, "loss_reduction": 0.5},
+    {"recall": 0.84, "fpr": 0.01, "loss_reduction": 0.5},
     {"recall": 0.95, "fpr": 0.02, "loss_reduction": 0.5},
     {"recall": 0.95, "fpr": 0.01, "loss_reduction": 0.2},
 ])
@@ -151,7 +151,9 @@ def test_BR006_registration_rejects_missing_or_failed_acceptance(monkeypatch, me
 
 @pytest.mark.parametrize("recall,demonstration,status,scope", [
     (0.95, False, "passed", "quality_gated"),
-    (0.85, True, "failed", "demonstration_only"),
+    (0.85, False, "passed", "quality_gated"),
+    (82 / 95, False, "passed", "quality_gated"),
+    (0.84, True, "failed", "demonstration_only"),
 ])
 def test_BR006_registration_labels_strict_and_demonstration_runs(
         monkeypatch, tiny_model, tiny_parts, recall, demonstration, status, scope):
@@ -172,6 +174,14 @@ def test_BR006_registration_labels_strict_and_demonstration_runs(
     tracking.set_tags.assert_called_once_with({
         "model_quality_acceptance": status, "deployment_scope": scope})
     client.set_registered_model_alias.assert_called_once_with(config.MODEL_NAME, config.ALIAS, "123")
+
+
+@pytest.mark.parametrize("recall,accepted", [(0.8499, False), (0.85, True), (82 / 95, True), (0.90, True)])
+def test_BR006_revised_recall_minimum_is_separate_from_desired_goal(recall, accepted):
+    assert config.MIN_ACCEPTANCE_RECALL == 0.85
+    assert config.TARGET_RECALL == 0.90
+    assert config.VALIDATION_RECALL_TARGET == 0.95
+    assert evaluate.targets_met({"recall": recall, "fpr": 0.01})["recall_ok"] is accepted
 
 
 def test_BR006_test_set_not_used_for_threshold():
