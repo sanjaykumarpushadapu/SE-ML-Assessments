@@ -17,14 +17,48 @@ from pipeline import run_pipeline as rp
 def test_BR002_threshold_meets_target_recall_on_validation(tiny_model, tiny_parts):
     """The chosen threshold must reach the target recall on the validation set."""
     thr, val_m = evaluate.evaluate_validation(tiny_model, tiny_parts["X_val"], tiny_parts["y_val"])
-    assert val_m["recall"] >= config.TARGET_RECALL
+    assert val_m["recall"] >= config.VALIDATION_RECALL_TARGET
     assert val_m["threshold"] == thr
 
 
-def test_BR002_unreachable_recall_raises():
+def test_BR002_validation_margin_does_not_change_acceptance_target(monkeypatch, tiny_model, tiny_parts):
+    monkeypatch.setattr(config, "VALIDATION_RECALL_TARGET", 0.95)
+    _, metrics = evaluate.evaluate_validation(tiny_model, tiny_parts["X_val"], tiny_parts["y_val"])
+    assert metrics["recall"] >= config.TARGET_RECALL
+    assert config.TARGET_RECALL == 0.90
+    assert evaluate.targets_met({"recall": 0.90, "fpr": 0.01})["recall_ok"] is True
+
+
+def test_BR002_recall_margin_respects_false_positive_limit():
+    labels = [1] * 20 + [0] * 100
+    probabilities = [0.95] * 18 + [0.55, 0.1] + [0.6] * 10 + [0.01] * 90
+    threshold = evaluate.choose_threshold(labels, probabilities, target_recall=0.95, max_fpr=0.02)
+    metrics = evaluate.compute_metrics(labels, probabilities, threshold)
+    assert metrics["recall"] == 0.90
+    assert metrics["fpr"] == 0.0
+
+
+def test_BR002_false_positive_limit_is_strict():
+    labels = [1] * 20 + [0] * 100
+    probabilities = [0.95] * 18 + [0.55, 0.1] + [0.6] * 2 + [0.01] * 98
+    threshold = evaluate.choose_threshold(labels, probabilities, target_recall=0.95, max_fpr=0.02)
+    assert threshold == 0.95
+
+
+def test_BR002_recall_margin_is_used_when_feasible():
+    labels = [1] * 20 + [0] * 100
+    probabilities = [0.95] * 18 + [0.55, 0.1] + [0.6] + [0.01] * 99
+    threshold = evaluate.choose_threshold(labels, probabilities, target_recall=0.95, max_fpr=0.02)
+    metrics = evaluate.compute_metrics(labels, probabilities, threshold)
+    assert metrics["recall"] == 0.95
+    assert metrics["fpr"] == 0.01
+
+
+@pytest.mark.parametrize("max_fpr", [None, 0.02])
+def test_BR002_unreachable_recall_raises(max_fpr):
     """If the target recall cannot be reached, choose_threshold must raise an error and not guess."""
     with pytest.raises(ValueError):
-        evaluate.choose_threshold([0, 1, 1], [0.9, 0.1, 0.2], target_recall=1.01)
+        evaluate.choose_threshold([0, 1, 1], [0.9, 0.1, 0.2], target_recall=1.01, max_fpr=max_fpr)
 
 
 def test_BR002_threshold_not_hard_coded_in_api():
@@ -62,6 +96,20 @@ def test_BR004_preprocessing_saved_inside_model(tiny_model, tiny_parts, tmp_path
     reloaded = joblib.load(path)
     X = tiny_parts["X_test"]
     np.testing.assert_allclose(reloaded.predict_proba(X), tiny_model.predict_proba(X))
+
+
+def test_BR003_boosted_candidate_fits_only_training_data(tiny_parts):
+    from threadpoolctl import threadpool_limits
+
+    with threadpool_limits(limits=2):
+        model = train_mod.train(tiny_parts["X_train"], tiny_parts["y_train"], "hist_gradient_boosting")
+        probabilities = model.predict_proba(tiny_parts["X_val"])
+    assert model.named_steps["clf"].early_stopping is False
+    assert model.named_steps["clf"].class_weight == "balanced"
+    assert model.named_steps["prep"].named_transformers_["scale"].center_[1] == pytest.approx(
+        tiny_parts["X_train"]["Amount"].median())
+    assert probabilities.shape == (len(tiny_parts["X_val"]), 2)
+    np.testing.assert_allclose(probabilities.sum(axis=1), 1.0)
 
 
 # ---- BR-005 / BR-006 metrics and honest targets ----------------------------------------
@@ -199,10 +247,18 @@ def test_BR011_same_seed_gives_same_split_and_results(tiny_df, tmp_path):
 
 def test_BR006_winner_is_lowest_validation_fpr_then_pr_auc():
     """The winner has the lowest validation false-positive rate; PR-AUC only breaks ties."""
-    fitted = {"a": (None, 0.5, {"fpr": 0.04, "pr_auc": 0.9}),
-              "b": (None, 0.5, {"fpr": 0.01, "pr_auc": 0.8}),
-              "c": (None, 0.5, {"fpr": 0.01, "pr_auc": 0.7})}
+    fitted = {"a": (None, 0.5, {"recall": 0.95, "fpr": 0.04, "pr_auc": 0.9}),
+              "b": (None, 0.5, {"recall": 0.95, "fpr": 0.01, "pr_auc": 0.8}),
+              "c": (None, 0.5, {"recall": 0.95, "fpr": 0.01, "pr_auc": 0.7})}
     assert rp.pick_winner(fitted) == "b"
+
+
+@pytest.mark.parametrize("boosted_recall", [0.93, 0.95])
+def test_BR006_winner_prefers_recall_within_false_positive_budget(boosted_recall):
+    fitted = {"baseline": (None, 0.5, {"recall": 0.90, "fpr": 0.001, "pr_auc": 0.8}),
+              "boosted": (None, 0.1, {"recall": boosted_recall, "fpr": 0.019, "pr_auc": 0.85}),
+              "too_many_false_alarms": (None, 0.1, {"recall": 0.99, "fpr": 0.02, "pr_auc": 0.9})}
+    assert rp.pick_winner(fitted) == "boosted"
 
 
 def test_BR006_fraud_loss_reduction_is_share_of_fraud_money_caught():

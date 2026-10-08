@@ -17,16 +17,21 @@ log = logging.getLogger("pipeline")
 
 
 def pick_winner(fitted: dict) -> str:
-    """Candidate with the lowest validation false-positive rate; PR-AUC breaks ties.
-
-    Every candidate already reaches the target recall on validation because its
-    threshold was chosen for that, so the false-positive rate decides (goal G2).
-    """
-    return min(fitted, key=lambda n: (fitted[n][2]["fpr"], -fitted[n][2]["pr_auc"]))
+    """Prefer the recall margin within the FPR budget, using validation only."""
+    feasible = [name for name, (_, _, metrics) in fitted.items()
+                if metrics["recall"] >= config.TARGET_RECALL and metrics["fpr"] < config.MAX_FPR]
+    preferred = [name for name in feasible
+                 if fitted[name][2]["recall"] >= config.VALIDATION_RECALL_TARGET]
+    if preferred:
+        return min(preferred, key=lambda name: (fitted[name][2]["fpr"], -fitted[name][2]["pr_auc"]))
+    if feasible:
+        return min(feasible, key=lambda name: (-fitted[name][2]["recall"], fitted[name][2]["fpr"],
+                                              -fitted[name][2]["pr_auc"]))
+    return min(fitted, key=lambda name: (fitted[name][2]["fpr"], -fitted[name][2]["pr_auc"]))
 
 
 def run_pipeline(data_path=config.DATA_PATH, candidates=CANDIDATES, track: bool = True) -> dict:
-    """Run every stage, pick the candidate with the lowest validation false-positive rate, test it once."""
+    """Run every stage, select on validation recall/FPR, then test the frozen choice once."""
     # Each stage hands its output to the next one.
     raw = ingest(data_path)
     log.info("[1/6 ingest]   rows=%d columns=%d", *raw.shape)
@@ -64,6 +69,8 @@ def run_pipeline(data_path=config.DATA_PATH, candidates=CANDIDATES, track: bool 
 
     result = {"winner": winner, "threshold": threshold, "val": val_m, "test": test_m,
               "targets_met": checks,
+              "selection_policy": {"validation_recall_target": config.VALIDATION_RECALL_TARGET,
+                                   "minimum_recall": config.TARGET_RECALL, "max_fpr": config.MAX_FPR},
               "candidates": {n: {"threshold": t, "val": m} for n, (_, t, m) in fitted.items()}}
 
     if track:  # track=False lets the tests run the pipeline without MLflow

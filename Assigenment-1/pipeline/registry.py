@@ -23,6 +23,10 @@ def log_candidate(name: str, model, X_example, threshold: float, val_metrics: di
         mlflow.log_param("model_name", name)
         mlflow.log_param("seed", config.SEED)
         mlflow.log_param("threshold", threshold)
+        mlflow.log_params({"validation_recall_target": config.VALIDATION_RECALL_TARGET,
+                           "minimum_validation_recall": config.TARGET_RECALL,
+                           "max_validation_fpr": config.MAX_FPR})
+        mlflow.log_params({f"clf__{key}": value for key, value in model.named_steps["clf"].get_params().items()})
         # Metrics: what came out (counts such as tn/fp are left out of the metric table).
         mlflow.log_metrics({f"val_{k}": v for k, v in val_metrics.items()
                             if k not in ("tn", "fp", "fn", "tp")})

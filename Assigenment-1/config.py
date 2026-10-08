@@ -32,6 +32,7 @@ TARGET = "Class"                  # 1 = fraud, 0 = genuine
 
 # Measurable goals from the report (Section 2.2).
 TARGET_RECALL = 0.90  # catch at least 90% of the frauds
+VALIDATION_RECALL_TARGET = 0.95
 MAX_FPR = 0.02        # wrongly flag less than 2% of genuine transactions
 MIN_LOSS_REDUCTION = 0.30  # business goal: cut fraud loss by 30% (measured as the share of fraud money caught)
 MAX_P95_MS = 200.0    # 95% of API calls must answer within 200 ms

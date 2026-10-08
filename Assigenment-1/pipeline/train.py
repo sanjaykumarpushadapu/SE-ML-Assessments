@@ -1,14 +1,14 @@
 """Filter 5: fit a model. The scaler and the classifier are one sklearn Pipeline."""
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import RobustScaler
 
 import config
 
-CANDIDATES = ("logistic_regression", "random_forest")  # the two models we compare
+CANDIDATES = ("logistic_regression", "random_forest", "hist_gradient_boosting")
 
 
 def make_estimator(name: str, seed: int = config.SEED):
@@ -22,6 +22,10 @@ def make_estimator(name: str, seed: int = config.SEED):
         return RandomForestClassifier(n_estimators=100, max_depth=12, min_samples_leaf=2,
                                       class_weight="balanced_subsample", n_jobs=-1,
                                       random_state=seed)
+    if name == "hist_gradient_boosting":
+        return HistGradientBoostingClassifier(max_iter=100, max_leaf_nodes=15,
+                                              l2_regularization=10.0, class_weight="balanced",
+                                              early_stopping=False, random_state=seed)
     raise ValueError(f"Unknown model name: {name}")
 
 

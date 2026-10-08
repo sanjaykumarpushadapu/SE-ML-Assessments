@@ -32,7 +32,8 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parent
 NB, MD, METRICS = ROOT / "13.ipynb", ROOT / "13.md", ROOT / "artifacts" / "metrics.json"
 SHOTS = ROOT / "docs" / "screenshots"
-NAMES = {"logistic_regression": "Logistic Regression", "random_forest": "Random Forest"}
+NAMES = {"logistic_regression": "Logistic Regression", "random_forest": "Random Forest",
+         "hist_gradient_boosting": "Histogram Gradient Boosting"}
 
 
 # ---------------------------------------------------------------- read the run ----------------
@@ -120,11 +121,31 @@ def verify_live_docker(c):
         run = read_json(f"{registry_url}/api/2.0/mlflow/runs/get?run_id={model['run_id']}")["run"]["data"]
         params = {item["key"]: item["value"] for item in run["params"]}
         metrics = {item["key"]: item["value"] for item in run["metrics"]}
+        native_source = None
+        if str(m["model_version"]) != str(model["version"]):
+            from mlflow import MlflowClient
+
+            native_client = MlflowClient(tracking_uri=f"sqlite:///{ROOT / 'mlflow.db'}")
+            native_version = native_client.get_model_version("fraud-model", str(m["model_version"]))
+            native_run = native_client.get_run(native_version.run_id)
+            if (native_run.data.params["model_name"] != m["winner"]
+                    or float(native_run.data.params["threshold"]) != m["threshold"]
+                    or not all(native_run.data.metrics.get(f"{split}_{key}") == value
+                               for split in ("val", "test") for key, value in m[split].items()
+                               if key not in ("tn", "fp", "fn", "tp"))):
+                raise ValueError("shared metrics do not match their claimed native model version")
+            native_source = {"version": str(native_version.version), "run_id": native_version.run_id}
+            m = {**m, "model_version": str(model["version"])}
         matches = (
             health["status"] == "ok"
             and str(health["model_version"]) == str(model["version"]) == str(m["model_version"])
             and health["threshold"] == float(params["threshold"]) == m["threshold"]
             and params["model_name"] == m["winner"]
+            and ("selection_policy" not in m or all(
+                float(params[param]) == m["selection_policy"][field]
+                for param, field in (("validation_recall_target", "validation_recall_target"),
+                                     ("minimum_validation_recall", "minimum_recall"),
+                                     ("max_validation_fpr", "max_fpr"))))
             and all(metrics.get(f"{split}_{key}") == value
                     for split in ("val", "test") for key, value in m[split].items()
                     if key not in ("tn", "fp", "fn", "tp"))
@@ -138,6 +159,9 @@ def verify_live_docker(c):
             "Older saved notebook versions alone do not prevent report generation."
         ) from error
     c["saved_docker_version"] = saved_version
+    c["m"] = m
+    if native_source:
+        c["native_metrics_source"] = native_source
     c["version"] = c["docker_version"] = str(model["version"])
     c["docker_health"] = health
     c["run_id"] = model["run_id"]
@@ -175,6 +199,22 @@ def g_results(c):
     else:
         why = (f"{NAMES[w]} has the lower validation false-positive rate ({pct(v['fpr'], 2)} against {pct(ov['fpr'], 2)}), "
                f"so we selected it (version {c['version']} in the registry).")
+    policy = m.get("selection_policy")
+    threshold_rule = "For each model the threshold is the highest one that still gives a validation recall of at least 0.90."
+    selection_note = ("In our first run we chose the winner by the best validation PR-AUC and Random Forest won. "
+                      "It missed both test targets. We then selected by validation FPR. These changes came after seeing earlier test results.")
+    if policy:
+        threshold_rule = (f"We aimed for {pct(policy['validation_recall_target'])} recall on validation while keeping FPR below "
+                          f"{pct(policy['max_fpr'])}. Where that was not possible, we chose the highest validation recall within the FPR limit, "
+                          f"provided it reached the {pct(policy['minimum_recall'])} minimum. Infeasible candidates are shown for comparison.")
+        why = (f"We selected {NAMES[w]} (version {c['version']}) using validation results only: it gave the highest feasible recall "
+               f"({pct(v['recall'])}) within the false-positive limit ({pct(v['fpr'], 2)}).")
+        if v['recall'] >= policy['validation_recall_target']:
+            why = (f"We selected {NAMES[w]} (version {c['version']}) because it met the validation recall margin and had "
+                   "the lowest FPR among candidates meeting that margin; PR-AUC breaks ties.")
+        selection_note = ("After seeing the earlier recall shortfall, we added a boosted-tree candidate and a validation recall margin. "
+                          "We compared two boosted-tree configurations using training and validation data, then froze the choice before this test evaluation. "
+                          "The test set had already been inspected, so this is an exploratory result, not a fresh hold-out assessment.")
     verdict = []
     verdict.append("The FPR target (below 2%) is " + ("met" if ok_f else "not met"))
     verdict.append("the recall target (at least 90%) is " + ("met" if ok_r else "not met") + f" on the test set ({pct(t['recall'])})")
@@ -191,20 +231,24 @@ def g_results(c):
                     f"so the fraud loss goes down by {pct(t['loss_reduction'])}, against the target of 30% ({'met' if m['targets_met'].get('loss_ok') else 'not met'}). "
                     f"The cost is that genuine transactions worth {t['genuine_amount_blocked']:,.2f} were also flagged, and a real bank would have to consider the cost of these blocked payments too. "
                     "This is only an estimate from the test set and it does not include chargeback fees or the cost of reviewing the flagged transactions.\n\n")
-    evidence = (f"**Run evidence:** These metrics describe {c['metrics_registry']} champion version {c['version']}. "
-                f"Docker screenshots and their prediction/log evidence describe that same Docker champion version {c['docker_version']}. "
-                f"Latency measurements and charts come from the saved native notebook run, serving version {c['fraud_call']['model_version']}. "
-                "Native and Docker registries have independent version numbers.\n\n") if c["docker_version"] else ""
+    evidence = (f"**About these results:** The model results and Docker screenshots use Docker champion version {c['version']}. "
+                f"The latency measurements and charts are from the saved native notebook run using version {c['fraud_call']['model_version']}. "
+                "The native and Docker registries number their versions separately. ") if c["docker_version"] else ""
     if c.get("live_docker"):
-        evidence += ("**Evidence source:** The current Docker version, threshold, selected model, and evaluation metrics were verified against "
-                     "the live Docker API and champion's MLflow run; saved notebook outputs are historical evidence.\n\n")
-    return f"""{evidence}**Model results:** The dataset has {n(c['rows'])} rows with {c['raw_fraud']} frauds ({c['raw_pct']}%). After removing {n(c['removed'])} duplicate rows, {n(c['clean_rows'])} rows remain with {c['clean_fraud']} frauds ({c['clean_pct']}%). The stratified split gives {n(c['train'])} training, {n(c['val'])} validation and {n(c['test'])} test rows. For each model the threshold is the highest one that still gives a validation recall of at least 0.90.
+        evidence += ("We checked the Docker version, threshold and results against the running API and the model's MLflow run.\n\n")
+        if c.get("native_metrics_source"):
+            evidence += (f"The shared metrics file currently contains native version {c['native_metrics_source']['version']}. "
+                         f"We verified that native run and confirmed the same selected-model results in Docker version {c['version']}; "
+                         "the report uses the Docker version for its screenshots and registry evidence. The shared file was not overwritten.\n\n")
+    elif evidence:
+        evidence += "\n\n"
+    return f"""{evidence}**Model results:** The dataset has {n(c['rows'])} rows with {c['raw_fraud']} frauds ({c['raw_pct']}%). After removing {n(c['removed'])} duplicate rows, {n(c['clean_rows'])} rows remain with {c['clean_fraud']} frauds ({c['clean_pct']}%). The stratified split gives {n(c['train'])} training, {n(c['val'])} validation and {n(c['test'])} test rows. {threshold_rule}
 
 | Model (validation) | Threshold | Recall | Precision | FPR | PR-AUC |
 |---|---|---|---|---|---|
 {rows}
 
-Both models were tuned to the recall target on validation. {why} Below are the results of the selected model on the test set, which we used only once:
+We compared {len(cand)} models on validation. {why} Below are the test results at the frozen validation-selected threshold:
 
 | Recall | Precision | F1 | PR-AUC | ROC-AUC | FPR |
 |---|---|---|---|---|---|
@@ -212,11 +256,16 @@ Both models were tuned to the recall target on validation. {why} Below are the r
 
 Confusion matrix on the test set: TN {n(t['tn'])}, FP {n(t['fp'])}, FN {n(t['fn'])}, TP {n(t['tp'])}. **{verdict[0]}, {'and' if ok_f == ok_r else 'but'} {verdict[1]}.**{note}
 
-{loss_par}**Note on the selection rule:** In our first run we chose the winner by the best validation PR-AUC and Random Forest won. On the test set it missed both targets (recall 87.4%, FPR 4.74%). After seeing this we changed the rule to the lowest validation FPR, with PR-AUC as tie-break, because the false-alarm limit is one of our stated goals. The change was based on validation results only, but we made it after seeing the first run, so we mention it here."""
+{loss_par}**Note on the selection rule:** {selection_note}"""
 
 
 def g_analytics(c):
     m = c["m"]; w = m["winner"]; v = m["val"]; t = m["test"]
+    if m.get("selection_policy"):
+        return (f"We compared Logistic Regression, Random Forest and Histogram Gradient Boosting. "
+                f"{NAMES[w]} was selected using validation recall and the false-positive limit, not test results. "
+                f"It reached {pct(v['recall'])} recall and {pct(v['fpr'], 2)} FPR on validation, then "
+                f"{pct(t['recall'])} recall and {pct(t['fpr'], 2)} FPR in the exploratory test evaluation.")
     other = [k for k in m["candidates"] if k != w][0]
     ov = m["candidates"][other]["val"]
     return (f"In our run {NAMES[w]} was selected because it had the lower validation false-positive rate "
@@ -228,28 +277,29 @@ def g_analytics(c):
 def g_registry(c):
     m = c["m"]
     registry = f"{c['metrics_registry']} registry"
-    return (f"After the run, the {registry} has fraud-model with {NAMES[m['winner']]} as version {c['version']} with the alias champion, and the stored "
-            f"threshold is {m['threshold']:.4f}. At startup the prediction service resolves champion once, loads the "
-            "fixed numeric model version, and reads the threshold from that same version's run. This prevents a "
-            "concurrent promotion from mixing a model with another version's threshold. Restart the API after promotion to load it.")
+    return (f"We stored {NAMES[m['winner']]} as fraud-model version {c['version']} in the {registry}, with the alias champion "
+            f"and threshold {m['threshold']:.4f}. When the API starts, it looks up champion once and loads that version "
+            "and its threshold. This keeps the model and threshold together even if champion changes while the API is starting. "
+            "We need to restart the API to load a new champion.")
 
 
 def g_latency(c):
     med, p95, mx = c["lat"]
-    return (f"**Measured latency (saved native notebook run, model version {c['fraud_call']['model_version']}):** "
-            f"For 100 requests the median is {med} ms, the p95 is {p95} ms and the maximum is {mx} ms. "
-            f"The target of p95 below 200 ms is {'met' if float(p95) < 200 else 'not met'}.")
+    return (f"**Response time:** In the saved native notebook run (model version {c['fraud_call']['model_version']}), "
+            f"we sent 100 requests. The median was {med} ms, the p95 was {p95} ms and the maximum was {mx} ms. "
+            f"The p95 target of below 200 ms was {'met' if float(p95) < 200 else 'not met'}.")
 
 
 def g_tests(c):
-    return f"The last pytest run shows **{c['tests']} passed**."
+    return f"In the saved notebook test run, **{c['tests']} tests passed**."
 
 
 def g_shots(c):
+    m = c["m"]
     f, g, t = c["fraud_call"], c["genuine_call"], c["m"]["test"]
-    source = "A saved native notebook request"
-    log_caption = (f"The saved native notebook log after its test calls and 100 latency requests: {c['rows_logged']} rows, "
-                   "each with timestamp, request id, probability, label, latency and model version.")
+    source = "We sent this request in the saved native notebook run"
+    log_caption = (f"The saved notebook log had {c['rows_logged']} rows after the test calls and 100 timing requests. "
+                   "Each row records the time, request ID, probability, label, response time and model version.")
     if c.get("live_docker"):
         evidence = c.get("screenshot_evidence")
         if (not evidence or evidence.get("model_version") != c["version"]
@@ -261,29 +311,29 @@ def g_shots(c):
                        for name, digest in ((f"{name}.png", digest) for name, digest in evidence.get("images", {}).items()))):
             raise SystemExit("Screenshot evidence is missing, stale, or changed. Rerun build_report.py without --no-shots.")
         f, g = evidence["calls"]["fraud"], evidence["calls"]["genuine"]
-        source = "A live Docker request executed through Swagger /docs"
-        log_caption = (f"Two persisted log rows matched to the exact request IDs in screenshots 4 and 5, both serving "
-                       f"Docker model version {evidence['model_version']}. At capture, the shared CSV contained {evidence['log']['total_rows']} rows "
-                       "across executions; only these two verified rows are displayed. This is not the native latency-test snapshot.")
+        source = "We sent this request to the running Docker API through Swagger /docs"
+        log_caption = (f"These two log rows have the same request IDs as screenshots 4 and 5 and use Docker model version "
+                   f"{evidence['model_version']}. The CSV had {evidence['log']['total_rows']} rows when we took the screenshot; "
+                   "we show only these two rows. This log is separate from the saved native timing measurements.")
     w = c["m"]["winner"]
     rows = [
-        ("Pipeline run", "pipeline_run", f"Output of the six-filter pipeline: {n(c['rows'])} rows read, {n(c['removed'])} duplicates removed, the 60/20/20 split, both models trained and {NAMES[w]} selected, with test recall {t['recall']:.3f} and FPR {t['fpr']:.4f}."),
-        ("MLflow", "mlflow", f"Live {'Docker ' if c.get('live_docker') or docker_output(c['nb']) else ''}registry page of fraud-model. Version {c['docker_version'] or c['version']} is registered and has the alias champion."),
-        ("FastAPI", "fastapi_docs", f"The live {'Docker API ' if c.get('live_docker') or docker_output(c['nb']) else 'service '}/docs page, focused on an executed GET /health response showing model version {c['docker_version'] or c['version']} and its decision threshold. The Swagger header's API release number is not the MLflow model version."),
-        ("Fraud test call", "test_fraud", f"{source}, serving model version {f['model_version']}. The fraud probability is {f['probability']:.4f}, is_fraud is {str(f['is_fraud']).lower()} and the answer came in {f['latency_ms']:.0f} ms."),
-        ("Genuine test call", "test_genuine", f"{source}, serving model version {g['model_version']}. The probability is {g['probability']:.3f}, {'below' if g['probability'] < g['threshold'] else 'above'} the threshold {g['threshold']:.4f}, so is_fraud is {str(g['is_fraud']).lower()}."),
+        ("Pipeline run", "pipeline_run", f"The six pipeline stages read {n(c['rows'])} rows, removed {n(c['removed'])} duplicates and made the 60/20/20 split. We trained {len(m['candidates'])} models and chose {NAMES[w]}. Its test recall was {t['recall']:.3f} and FPR was {t['fpr']:.4f}."),
+        ("MLflow", "mlflow", f"The running {'Docker ' if c.get('live_docker') or docker_output(c['nb']) else ''}registry shows fraud-model version {c['docker_version'] or c['version']} with the alias champion."),
+        ("FastAPI", "fastapi_docs", f"We ran GET /health from the {'Docker API ' if c.get('live_docker') or docker_output(c['nb']) else 'service '}/docs page. The response shows model version {c['docker_version'] or c['version']} and its threshold. The number in the Swagger page heading is the API release, not the model version."),
+        ("Fraud test call", "test_fraud", f"{source}. The API used model version {f['model_version']} and returned fraud probability {f['probability']:.4f}, is_fraud={str(f['is_fraud']).lower()}, in {f['latency_ms']:.0f} ms."),
+        ("Genuine test call", "test_genuine", f"{source}. Model version {g['model_version']} returned probability {g['probability']:.3f}, {'below' if g['probability'] < g['threshold'] else 'above'} the threshold {g['threshold']:.4f}, so is_fraud={str(g['is_fraud']).lower()}."),
         ("Prediction log", "prediction_log", log_caption),
     ]
     dock = c.get("live_docker") or docker_output(c["nb"])
     if dock:
         rows.append(("Docker Compose", "docker_compose",
-                     f"Live Compose status and {'live registry verification' if c.get('live_docker') else 'the saved Docker notebook checks'}: registry (container port 5000) and "
-                     "prediction-api (container port 8000), published on dynamically assigned localhost ports. "
-                     f"The Docker champion is version {c['docker_version']}; services remain running until manually stopped."))
+                     "Docker Compose shows the registry and prediction API running on container ports 5000 and 8000. "
+                     "Their localhost ports are assigned when they start. "
+                     f"The Docker champion is version {c['docker_version']}. We leave both services running until we stop them manually."))
         rows.append(("Docker database", "docker_database",
-                     "Read-only SQLite inspection executed inside the registry container, showing the database file, "
-                     f"tables, model-version count, and champion model version {c['docker_version']}. /app/docker-mlflow.db persists in the bind-mounted project folder; "
-                     "SQLite is embedded in the registry, not a separate database-server container."))
+                     "We checked SQLite inside the registry container without changing it. The screenshot shows the file, tables, "
+                     f"number of model versions and champion version {c['docker_version']}. The database file, /app/docker-mlflow.db, "
+                     "is kept in the shared project folder. SQLite runs inside the registry; it is not another container."))
     return "\n\n".join(f"**Screenshot {i} - {a}.** {e}\n\n![{a}](docs/screenshots/{b}.png)" for i, (a, b, e) in enumerate(rows, 1))
 
 
@@ -313,7 +363,7 @@ def g_conclusion(c):
              f"the test recall is {pct(t['recall'])} against the 90% target, so that goal is {'met' if ok_r else 'not met'}"
              + (f". The estimated fraud loss reduction is {pct(t['loss_reduction'])} against the 30% target ({'met' if m['targets_met'].get('loss_ok') else 'not met'})" if "loss_reduction" in t else ""))
     return ("In this assignment we built a fraud detection system with a pipe-and-filter training pipeline, an MLflow registry and a FastAPI "
-            f"microservice that serves the champion model, with prediction logging and {c['tests']} automated tests."
+            f"microservice that serves the champion model, with prediction logging and automated tests. In the saved notebook run, {c['tests']} tests passed."
             f"{' With Docker Compose the registry and the prediction API also run as two separate containers.' if docker_output(c['nb']) else ''}"
             f" Against our goals: {goals}. "
             "From this work we learned that with so few frauds in each split the recall on the test set can differ from the validation recall, "
@@ -383,20 +433,15 @@ def g_fig_features(c):
 
 
 def g_fig_cm(c):
-    t = c["m"]["test"]
     return fig(c, "# Cell: draw the confusion matrix", 5, "Confusion matrix on the test set",
-               f"It shows the four counts given above: {t['tp']} of the {t['tp'] + t['fn']} frauds are caught and "
-               f"{n(t['fp'])} genuine transactions are flagged.")
+               f"This is the saved native notebook chart for model version {c['fraud_call']['model_version']}, "
+               "not the current Docker model. The current model's counts are in the results table above.")
 
 
 def g_fig_models(c):
-    m = c["m"]
-    fprs = ", ".join(f"{NAMES.get(k, k)} {pct(x['val']['fpr'])} (PR-AUC {x['val']['pr_auc']:.3f})"
-                     for k, x in m["candidates"].items())
     return fig(c, "# Cell: compare the two candidates", 6, "Model comparison on the validation set",
-               "Each threshold was set to reach at least 90% recall on validation, so the false-positive rate "
-               f"decides: {fprs}, against the 2% target line. {NAMES.get(m['winner'], m['winner'])} has the lowest "
-               "false-positive rate and was selected.")
+               "This saved native chart shows the earlier Logistic Regression and Random Forest comparison under the "
+               "90% validation recall rule. It does not show the new boosted candidate. The current comparison is in the results table.")
 
 
 def g_fig_pr(c):
@@ -409,7 +454,22 @@ def g_fig_pr(c):
                f"with {n(int(k))} genuine transactions flagged. This analysis is not used to tune, serve or promote a model.")
 
 
+def g_acceptance(c):
+    from scipy.stats import binomtest
+
+    metrics = c["m"]["test"]
+    frauds = metrics["tp"] + metrics["fn"]
+    interval = binomtest(metrics["tp"], frauds).proportion_ci(confidence_level=0.95, method="exact")
+    status = "G1 meets its numerical target" if c["m"]["targets_met"]["recall_ok"] else "G1 fails"
+    return (f"**Latest acceptance status:** {status}: test recall is {pct(metrics['recall'], 2)} against the 90% target. "
+         f"The model caught {metrics['tp']} of {frauds} frauds and missed {metrics['fn']}. "
+         f"The 95% exact binomial interval is {pct(interval.low, 2)} to {pct(interval.high, 2)}; it does not change the pass/fail decision. "
+         "Passing software tests does not establish model-quality acceptance. The reused test set is exploratory, "
+         "and a fresh untouched hold-out is needed before claiming production acceptance.")
+
+
 GEN = {"q1": g_q1, "results": g_results, "analytics": g_analytics, "registry": g_registry,
+    "acceptance": g_acceptance,
        "latency": g_latency, "goals": g_goals, "tests": g_tests, "shots": g_shots, "conclusion": g_conclusion,
     "deployment": g_deployment,
        "fig_eda": g_fig_eda, "fig_hour": g_fig_hour, "fig_amount": g_fig_amount, "fig_features": g_fig_features,

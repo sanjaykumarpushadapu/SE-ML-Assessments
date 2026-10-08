@@ -1,57 +1,57 @@
 {
   "source": "Docker",
-  "model_version": "14",
-  "run_id": "989e8cb9cea9417fba1defa5d8862287",
-  "threshold": 0.7691997772934724,
+  "model_version": "16",
+  "run_id": "b4fee39db9cb4598807a7c47e4c39b04",
+  "threshold": 0.022606854478447718,
   "calls": {
     "fraud": {
-      "request_id": "71c9daab-7e5e-466f-8ff6-e1ba728c7748",
-      "probability": 0.9999999998115436,
+      "request_id": "152c40cf-510c-417b-b751-9cacc258bffe",
+      "probability": 0.9994017368367172,
       "is_fraud": true,
-      "threshold": 0.7691997772934724,
-      "model_version": "14",
-      "latency_ms": 4.468
+      "threshold": 0.022606854478447718,
+      "model_version": "16",
+      "latency_ms": 38.966
     },
     "genuine": {
-      "request_id": "f5239ed0-9a87-4b02-8b15-e5e867cc6259",
-      "probability": 0.027732498423563994,
+      "request_id": "7ef2dd29-2be8-4300-bdb3-f9c1f6c7ccd0",
+      "probability": 0.00030342745551724734,
       "is_fraud": false,
-      "threshold": 0.7691997772934724,
-      "model_version": "14",
-      "latency_ms": 3.347
+      "threshold": 0.022606854478447718,
+      "model_version": "16",
+      "latency_ms": 105.766
     }
   },
   "log": {
     "path": "/app/predictions_log.csv",
-    "total_rows": 743,
+    "total_rows": 857,
     "rows": [
       {
-        "timestamp": "2026-10-08T09:17:23.148932+00:00",
-        "request_id": "71c9daab-7e5e-466f-8ff6-e1ba728c7748",
-        "probability": "1.0",
+        "timestamp": "2026-10-08T10:40:52.350677+00:00",
+        "request_id": "152c40cf-510c-417b-b751-9cacc258bffe",
+        "probability": "0.999402",
         "is_fraud": "1",
-        "latency_ms": "4.468",
-        "model_version": "14"
+        "latency_ms": "38.966",
+        "model_version": "16"
       },
       {
-        "timestamp": "2026-10-08T09:17:23.544439+00:00",
-        "request_id": "f5239ed0-9a87-4b02-8b15-e5e867cc6259",
-        "probability": "0.027732",
+        "timestamp": "2026-10-08T10:40:52.884189+00:00",
+        "request_id": "7ef2dd29-2be8-4300-bdb3-f9c1f6c7ccd0",
+        "probability": "0.000303",
         "is_fraud": "0",
-        "latency_ms": "3.347",
-        "model_version": "14"
+        "latency_ms": "105.766",
+        "model_version": "16"
       }
     ]
   },
-  "captured_at": "2026-10-08T09:17:26.140819+00:00",
+  "captured_at": "2026-10-08T10:40:55.596954+00:00",
   "images": {
-    "pipeline_run": "db34ba8ad89bde468fe9fb3a5da74b8afcb92177d8fc8f9d26b6ecc2afd5ab8e",
-    "docker_compose": "778ccd29359ca178809887e48a2df33b9216592e54b7303f6faef75fb93dd90e",
-    "docker_database": "9939abe832f02be95570c28df2e7d8116594e169ff1c820b5b517e9583c713f9",
-    "test_fraud": "a76b7fd04bd67ad5b5413c76115251d5f3fca6a9eef6ee24557d07d1299d5372",
-    "test_genuine": "767a8709d68a341fa113238ea1fe0aae2e30b9a7c19816b435da71073d316d43",
-    "prediction_log": "a4fb5a0dbeeae9fc04103d672e6e5f42fcfbab229360ed8bba1b07dcb4bb85f5",
-    "fastapi_docs": "7d2df5090e485814bf41ffcb43f5d26c50ced71bb243e183d6572fc50e1dbb49",
-    "mlflow": "e93318d8a9331e3618f685ec4502acd16cf84094362a3c00e5ee19154bc84341"
+    "pipeline_run": "6365c79809760a7a6d854948aae9d3b14c4658c102afa7b0dee36ae48840e817",
+    "docker_compose": "d01347d15f19e07e6cef593c56dbea502fef0456679ec2c2fed6d84a53042b6c",
+    "docker_database": "550664cd36c576be0081b318e38a3b1a0c4450eabf71356293e68af1399693d8",
+    "test_fraud": "a86a888f57100578fa55735e19901b178b1b4dcae1d2545e5d32934a424db5a5",
+    "test_genuine": "06fe00296e2cf5757b521f9c90d62ec8e6eb6cd8f51a1c3cdc04095c764186e7",
+    "prediction_log": "91b2c93afaff491786dec6ac559e512328e8013f34a2b1e2ebe8d8cc6ba62b63",
+    "fastapi_docs": "fddbbd831285dec8bab0bd110d0285452d5dcc41a01ce86bc55d2005660b896f",
+    "mlflow": "fbb3dff88ee4cbc8c22bdb838e45dce502548e809dbd437b3ab8988a2a265cca"
   }
 }

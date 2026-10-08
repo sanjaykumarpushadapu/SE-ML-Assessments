@@ -3,13 +3,27 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import (average_precision_score, confusion_matrix, f1_score,
                              precision_recall_curve, precision_score, recall_score,
-                             roc_auc_score)
+                             roc_auc_score, roc_curve)
 
 import config
 
 
-def choose_threshold(y_true, proba, target_recall: float = config.TARGET_RECALL) -> float:
-    """Highest threshold that still gives recall >= target on the given data."""
+def choose_threshold(y_true, proba, target_recall: float = config.TARGET_RECALL,
+                     max_fpr: float | None = None) -> float:
+    """Prefer the recall target; with an FPR cap, fall back to the best feasible recall."""
+    if not 0 < target_recall <= 1:
+        raise ValueError("Target recall must be between 0 and 1.")
+    if max_fpr is not None:
+        false_positive_rates, recalls, operating_thresholds = roc_curve(y_true, proba, drop_intermediate=False)
+        feasible = np.flatnonzero((false_positive_rates < max_fpr)
+                                  & (recalls >= config.TARGET_RECALL)
+                                  & np.isfinite(operating_thresholds))
+        preferred = feasible[recalls[feasible] >= target_recall]
+        if len(preferred):
+            return float(operating_thresholds[preferred[0]])
+        if len(feasible):
+            best_recall = recalls[feasible].max()
+            return float(operating_thresholds[feasible[recalls[feasible] == best_recall][0]])
     # precision_recall_curve lists every possible threshold with its recall.
     # Recall goes down as the threshold goes up.
     _, recall, thresholds = precision_recall_curve(y_true, proba)
@@ -70,7 +84,8 @@ def loss_metrics(y_true, proba, threshold: float, amount) -> dict:
 def evaluate_validation(model, X_val: pd.DataFrame, y_val: pd.Series) -> tuple[float, dict]:
     """Pick the threshold on the validation set and report validation metrics."""
     proba = model.predict_proba(X_val)[:, 1]  # column 1 = probability of fraud
-    threshold = choose_threshold(y_val, proba)
+    threshold = choose_threshold(y_val, proba, target_recall=config.VALIDATION_RECALL_TARGET,
+                                 max_fpr=config.MAX_FPR)
     return threshold, compute_metrics(y_val, proba, threshold)
 
 
