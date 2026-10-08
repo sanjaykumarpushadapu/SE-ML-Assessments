@@ -1,0 +1,22 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# Data: the CSV is unzipped locally from data/creditcard.zip (which stays tracked)
+Assigenment-1/data/creditcard.csv
+
+# Generated at run time (the pipeline cell deletes and recreates these on every run)
+Assigenment-1/mlflow.db
+Assigenment-1/mlruns/
+Assigenment-1/predictions_log.csv
+Assigenment-1/api.log

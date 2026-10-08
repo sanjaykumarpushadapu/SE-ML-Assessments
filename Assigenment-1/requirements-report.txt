@@ -1,0 +1,4 @@
+# Only needed to run build_report.py (regenerates 13.md screenshots and 13.pdf).
+# After installing, also run:  playwright install chromium
+markdown
+playwright
