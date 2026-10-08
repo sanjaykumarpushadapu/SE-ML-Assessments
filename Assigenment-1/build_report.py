@@ -15,8 +15,10 @@ How it works
     everything else in 13.md is left alone, so it is safe to edit the rest by hand.
   * Screenshots are saved in docs/screenshots/ (MLflow and FastAPI pages are opened in a headless browser,
     the other four are drawn from the notebook outputs).
+  * Charts (Figures 1-7) are not kept as files. Each one is copied from the notebook output into its
+    <!--A:fig_...--> block in 13.md as an embedded image, with a caption built from the same run.
 """
-import argparse, html, json, os, re, socket, subprocess, sys, time
+import argparse, ast, html, json, os, re, socket, subprocess, sys, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -41,6 +43,16 @@ def cell_html(nb, marker):
                 if o["output_type"] == "execute_result" and "text/html" in o["data"]:
                     return "".join(o["data"]["text/html"])
     return ""
+
+
+def cell_image(nb, marker):
+    """First chart (base64 PNG) drawn by the code cell whose source contains `marker`."""
+    for c in nb["cells"]:
+        if c["cell_type"] == "code" and marker in "".join(c["source"]):
+            for o in c.get("outputs", []):
+                if "image/png" in o.get("data", {}):
+                    return "".join(o["data"]["image/png"]).replace("\n", "")
+    raise SystemExit(f"Cell with '{marker}' has no chart. Run the notebook from top to bottom first.")
 
 
 def collect():
@@ -199,6 +211,77 @@ def g_loss_row(m):
     return f"| Reduce losses | Strategic goal | Share of fraud money caught (test set) | at least 30% | {pct(t['loss_reduction'])} | {'Yes' if ok else 'No'} |"
 
 
+# ---------------------------------------------------------------- figures ----------------------
+# The charts are not saved as files: each one is taken from the notebook output and embedded in 13.md.
+def fig(c, marker, num, title, text):
+    return f"**Figure {num} - {title}.** {text}\n\n![{title}](data:image/png;base64,{cell_image(c['nb'], marker)})"
+
+
+def g_fig_eda(c):
+    return fig(c, "# Cell: plot the class balance", 1, "Class balance and amount",
+               f"Only {n(c['raw_fraud'])} of the {n(c['rows'])} transactions ({c['raw_pct']}%) are fraud, and most "
+               "amounts are small with a long tail of large payments.")
+
+
+def g_fig_hour(c):
+    g, f = re.search(r"Hours 0-6: ([\d.]+)% of genuine, ([\d.]+)% of fraud",
+                     cell_text(c["nb"], "# Cell: share of genuine")).groups()
+    return fig(c, "# Cell: share of genuine", 2, "Time of the transactions",
+               "Each bar is the share of that class's transactions in one hour (Time is counted from the first "
+               f"transaction, so hour 0 is not midnight). {f}% of the frauds fall in hours 0 to 6, where only {g}% of "
+               "the genuine transactions happen, so fraud is relatively more common when there are few genuine "
+               "payments. This is why Time is kept as a model input.")
+
+
+def g_fig_amount(c):
+    t = cell_text(c["nb"], "# Cell: Amount of genuine")
+    gm, fm = (re.search(rf"{k}\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)", t).groups() for k in ("genuine", "fraud"))
+    top = max(float(gm[3]), float(fm[3]))
+    return fig(c, "# Cell: Amount of genuine", 3, "Amount",
+               f"The median fraud is {fm[1]} against {gm[1]} for a genuine payment, and the 95th percentile is "
+               f"{fm[2]} against {gm[2]}, so frauds are more spread out. Amount has a long tail, with a maximum of "
+               f"{top:,.2f}, which is why it is scaled with a RobustScaler in the Data Preparation View (Section 3.3).")
+
+
+def g_fig_features(c):
+    t = cell_text(c["nb"], "# Cell: the V features whose average")
+    gap = ast.literal_eval(t.split("Gap in standard deviations:")[1].strip())
+    listing = ", ".join(f"{k} {v:.1f}" for k, v in gap.items())
+    return fig(c, "# Cell: the V features whose average", 4, "Features that separate fraud best",
+               f"These are the {len(gap)} V features whose average differs most between the classes, measured in "
+               f"standard deviations ({listing}). The genuine averages are close to 0 and the fraud averages are far "
+               "from it. A simple linear model can use such differences, which supports Logistic Regression as a "
+               "candidate in the Analytics Design View (Section 3.2).")
+
+
+def g_fig_cm(c):
+    t = c["m"]["test"]
+    return fig(c, "# Cell: draw the confusion matrix", 5, "Confusion matrix on the test set",
+               f"It shows the four counts given above: {t['tp']} of the {t['tp'] + t['fn']} frauds are caught and "
+               f"{n(t['fp'])} genuine transactions are flagged.")
+
+
+def g_fig_models(c):
+    m = c["m"]
+    fprs = ", ".join(f"{NAMES.get(k, k)} {pct(x['val']['fpr'])} (PR-AUC {x['val']['pr_auc']:.3f})"
+                     for k, x in m["candidates"].items())
+    return fig(c, "# Cell: compare the two candidates", 6, "Model comparison on the validation set",
+               "Each threshold was set to reach at least 90% recall on validation, so the false-positive rate "
+               f"decides: {fprs}, against the 2% target line. {NAMES.get(m['winner'], m['winner'])} has the lowest "
+               "false-positive rate and was selected.")
+
+
+def g_fig_pr(c):
+    m, t = c["m"], c["m"]["test"]
+    p, k = re.search(r"precision ([\d.]+), (\d+) genuine transactions flagged",
+                     cell_text(c["nb"], "# Cell: draw the precision-recall curve")).groups()
+    return fig(c, "# Cell: draw the precision-recall curve", 7, "Precision-recall curve on the test set",
+               f"The red point is the threshold chosen on validation ({m['threshold']:.3f}), which gives recall "
+               f"{t['recall']:.3f} and precision {t['precision']:.3f} on the test set. The dashed line is the 90% "
+               f"recall target. Reaching it on this test set would lower precision to {pct(float(p))}, with "
+               f"{n(int(k))} genuine transactions flagged instead of {n(t['fp'])}.")
+
+
 def code_appendix():
     """All code of the notebook, grouped by file, for the printed report (Appendix A)."""
     nb = json.loads(NB.read_text())
@@ -217,7 +300,9 @@ def code_appendix():
 
 
 GEN = {"q1": g_q1, "results": g_results, "analytics": g_analytics, "registry": g_registry,
-       "latency": g_latency, "goals": g_goals, "tests": g_tests, "shots": g_shots, "conclusion": g_conclusion}
+       "latency": g_latency, "goals": g_goals, "tests": g_tests, "shots": g_shots, "conclusion": g_conclusion,
+       "fig_eda": g_fig_eda, "fig_hour": g_fig_hour, "fig_amount": g_fig_amount, "fig_features": g_fig_features,
+       "fig_cm": g_fig_cm, "fig_models": g_fig_models, "fig_pr": g_fig_pr}
 
 
 def update_md(c):
