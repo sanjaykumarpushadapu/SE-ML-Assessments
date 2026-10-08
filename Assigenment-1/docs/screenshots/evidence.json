@@ -1,0 +1,57 @@
+{
+  "source": "Docker",
+  "model_version": "14",
+  "run_id": "989e8cb9cea9417fba1defa5d8862287",
+  "threshold": 0.7691997772934724,
+  "calls": {
+    "fraud": {
+      "request_id": "71c9daab-7e5e-466f-8ff6-e1ba728c7748",
+      "probability": 0.9999999998115436,
+      "is_fraud": true,
+      "threshold": 0.7691997772934724,
+      "model_version": "14",
+      "latency_ms": 4.468
+    },
+    "genuine": {
+      "request_id": "f5239ed0-9a87-4b02-8b15-e5e867cc6259",
+      "probability": 0.027732498423563994,
+      "is_fraud": false,
+      "threshold": 0.7691997772934724,
+      "model_version": "14",
+      "latency_ms": 3.347
+    }
+  },
+  "log": {
+    "path": "/app/predictions_log.csv",
+    "total_rows": 743,
+    "rows": [
+      {
+        "timestamp": "2026-10-08T09:17:23.148932+00:00",
+        "request_id": "71c9daab-7e5e-466f-8ff6-e1ba728c7748",
+        "probability": "1.0",
+        "is_fraud": "1",
+        "latency_ms": "4.468",
+        "model_version": "14"
+      },
+      {
+        "timestamp": "2026-10-08T09:17:23.544439+00:00",
+        "request_id": "f5239ed0-9a87-4b02-8b15-e5e867cc6259",
+        "probability": "0.027732",
+        "is_fraud": "0",
+        "latency_ms": "3.347",
+        "model_version": "14"
+      }
+    ]
+  },
+  "captured_at": "2026-10-08T09:17:26.140819+00:00",
+  "images": {
+    "pipeline_run": "db34ba8ad89bde468fe9fb3a5da74b8afcb92177d8fc8f9d26b6ecc2afd5ab8e",
+    "docker_compose": "778ccd29359ca178809887e48a2df33b9216592e54b7303f6faef75fb93dd90e",
+    "docker_database": "9939abe832f02be95570c28df2e7d8116594e169ff1c820b5b517e9583c713f9",
+    "test_fraud": "a76b7fd04bd67ad5b5413c76115251d5f3fca6a9eef6ee24557d07d1299d5372",
+    "test_genuine": "767a8709d68a341fa113238ea1fe0aae2e30b9a7c19816b435da71073d316d43",
+    "prediction_log": "a4fb5a0dbeeae9fc04103d672e6e5f42fcfbab229360ed8bba1b07dcb4bb85f5",
+    "fastapi_docs": "7d2df5090e485814bf41ffcb43f5d26c50ced71bb243e183d6572fc50e1dbb49",
+    "mlflow": "e93318d8a9331e3618f685ec4502acd16cf84094362a3c00e5ee19154bc84341"
+  }
+}

@@ -17,11 +17,15 @@ How it works
     everything else in 13.md is left alone, so it is safe to edit the rest by hand.
     * Screenshots are saved in docs/screenshots/. MLflow and FastAPI use live Docker services when the notebook
         contains successful Docker checks; otherwise temporary native services use available localhost ports.
-        Other screenshots show saved notebook output, live Compose status, and read-only Docker SQLite inspection.
+        Docker prediction screenshots execute fresh Swagger requests and show their matching persisted CSV rows.
+        Captions use docs/screenshots/evidence.json, checked against image hashes and the live model/run.
+        --no-shots reuses that snapshot only when its model/run and images still match.
+        Other screenshots show saved notebook pipeline output, live Compose status, and read-only Docker SQLite inspection.
   * Charts (Figures 1-7) are not kept as files. Each one is copied from the notebook output into its
     <!--A:fig_...--> block in 13.md as an embedded image, with a caption built from the same run.
 """
-import argparse, ast, html, json, os, re, socket, subprocess, sys, time
+import argparse, ast, hashlib, html, json, os, re, socket, subprocess, sys, time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -99,6 +103,9 @@ def collect():
         verify_live_docker(c)
     elif str(m.get("model_version")) != c["version"] or m["threshold"] != c["fraud_call"]["threshold"]:
         raise SystemExit("Metrics do not match the saved native evaluation. Run the notebook and save its outputs first.")
+    evidence_path = SHOTS / "evidence.json"
+    if c.get("live_docker") and evidence_path.exists():
+        c["screenshot_evidence"] = json.loads(evidence_path.read_text(encoding="utf-8"))
     return c
 
 
@@ -133,6 +140,7 @@ def verify_live_docker(c):
     c["saved_docker_version"] = saved_version
     c["version"] = c["docker_version"] = str(model["version"])
     c["docker_health"] = health
+    c["run_id"] = model["run_id"]
     c["metrics_registry"] = "Docker"
     c["live_docker"] = (
         f"Live Docker champion version: {model['version']}\n"
@@ -184,9 +192,8 @@ def g_results(c):
                     f"The cost is that genuine transactions worth {t['genuine_amount_blocked']:,.2f} were also flagged, and a real bank would have to consider the cost of these blocked payments too. "
                     "This is only an estimate from the test set and it does not include chargeback fees or the cost of reviewing the flagged transactions.\n\n")
     evidence = (f"**Run evidence:** These metrics describe {c['metrics_registry']} champion version {c['version']}. "
-                f"Docker screenshots describe the separate Docker champion version {c['docker_version']}. "
-                f"The saved native prediction examples serve version {c['fraud_call']['model_version']}; "
-                "latency measurements and charts come from the saved native notebook run. "
+                f"Docker screenshots and their prediction/log evidence describe that same Docker champion version {c['docker_version']}. "
+                f"Latency measurements and charts come from the saved native notebook run, serving version {c['fraud_call']['model_version']}. "
                 "Native and Docker registries have independent version numbers.\n\n") if c["docker_version"] else ""
     if c.get("live_docker"):
         evidence += ("**Evidence source:** The current Docker version, threshold, selected model, and evaluation metrics were verified against "
@@ -229,7 +236,8 @@ def g_registry(c):
 
 def g_latency(c):
     med, p95, mx = c["lat"]
-    return (f"**Measured latency:** For 100 requests the median is {med} ms, the p95 is {p95} ms and the maximum is {mx} ms. "
+    return (f"**Measured latency (saved native notebook run, model version {c['fraud_call']['model_version']}):** "
+            f"For 100 requests the median is {med} ms, the p95 is {p95} ms and the maximum is {mx} ms. "
             f"The target of p95 below 200 ms is {'met' if float(p95) < 200 else 'not met'}.")
 
 
@@ -239,14 +247,32 @@ def g_tests(c):
 
 def g_shots(c):
     f, g, t = c["fraud_call"], c["genuine_call"], c["m"]["test"]
+    source = "A saved native notebook request"
+    log_caption = (f"The saved native notebook log after its test calls and 100 latency requests: {c['rows_logged']} rows, "
+                   "each with timestamp, request id, probability, label, latency and model version.")
+    if c.get("live_docker"):
+        evidence = c.get("screenshot_evidence")
+        if (not evidence or evidence.get("model_version") != c["version"]
+                or evidence.get("run_id") != c["run_id"]
+                or evidence.get("threshold") != c["m"]["threshold"]
+                or set(evidence.get("images", {})) != {"pipeline_run", "test_fraud", "test_genuine", "prediction_log",
+                                                        "docker_compose", "docker_database", "fastapi_docs", "mlflow"}
+                or any(not (SHOTS / name).exists() or hashlib.sha256((SHOTS / name).read_bytes()).hexdigest() != digest
+                       for name, digest in ((f"{name}.png", digest) for name, digest in evidence.get("images", {}).items()))):
+            raise SystemExit("Screenshot evidence is missing, stale, or changed. Rerun build_report.py without --no-shots.")
+        f, g = evidence["calls"]["fraud"], evidence["calls"]["genuine"]
+        source = "A live Docker request executed through Swagger /docs"
+        log_caption = (f"Two persisted log rows matched to the exact request IDs in screenshots 4 and 5, both serving "
+                       f"Docker model version {evidence['model_version']}. At capture, the shared CSV contained {evidence['log']['total_rows']} rows "
+                       "across executions; only these two verified rows are displayed. This is not the native latency-test snapshot.")
     w = c["m"]["winner"]
     rows = [
         ("Pipeline run", "pipeline_run", f"Output of the six-filter pipeline: {n(c['rows'])} rows read, {n(c['removed'])} duplicates removed, the 60/20/20 split, both models trained and {NAMES[w]} selected, with test recall {t['recall']:.3f} and FPR {t['fpr']:.4f}."),
         ("MLflow", "mlflow", f"Live {'Docker ' if c.get('live_docker') or docker_output(c['nb']) else ''}registry page of fraud-model. Version {c['docker_version'] or c['version']} is registered and has the alias champion."),
-        ("FastAPI", "fastapi_docs", f"The live {'Docker API ' if c.get('live_docker') or docker_output(c['nb']) else 'service '}/docs page with an executed GET /health response showing model version {c['docker_version'] or c['version']}, plus POST /predict request and response fields. The Swagger header's API release number is not the MLflow model version."),
-        ("Fraud test call", "test_fraud", f"A saved native notebook request, serving model version {f['model_version']}. The fraud probability is {f['probability']:.4f}, is_fraud is {str(f['is_fraud']).lower()} and the answer came in {f['latency_ms']:.0f} ms."),
-        ("Genuine test call", "test_genuine", f"A saved native notebook request, serving model version {g['model_version']}. The probability is {g['probability']:.3f}, {'below' if g['probability'] < g['threshold'] else 'above'} the threshold {g['threshold']:.4f}, so is_fraud is {str(g['is_fraud']).lower()}."),
-        ("Prediction log", "prediction_log", f"The prediction log after the test calls and the 100 latency requests: {c['rows_logged']} rows, each with timestamp, request id, probability, label, latency and model version."),
+        ("FastAPI", "fastapi_docs", f"The live {'Docker API ' if c.get('live_docker') or docker_output(c['nb']) else 'service '}/docs page, focused on an executed GET /health response showing model version {c['docker_version'] or c['version']} and its decision threshold. The Swagger header's API release number is not the MLflow model version."),
+        ("Fraud test call", "test_fraud", f"{source}, serving model version {f['model_version']}. The fraud probability is {f['probability']:.4f}, is_fraud is {str(f['is_fraud']).lower()} and the answer came in {f['latency_ms']:.0f} ms."),
+        ("Genuine test call", "test_genuine", f"{source}, serving model version {g['model_version']}. The probability is {g['probability']:.3f}, {'below' if g['probability'] < g['threshold'] else 'above'} the threshold {g['threshold']:.4f}, so is_fraud is {str(g['is_fraud']).lower()}."),
+        ("Prediction log", "prediction_log", log_caption),
     ]
     dock = c.get("live_docker") or docker_output(c["nb"])
     if dock:
@@ -394,9 +420,8 @@ def update_md(c):
     s = MD.read_text(encoding="utf-8")
     for key, fn in GEN.items():
         pat = re.compile(rf"(<!--A:{key}-->).*?(<!--/A:{key}-->)", re.S)
-        if not pat.search(s):
-            print(f"  warning: block A:{key} not found in 13.md")
-            continue
+        if len(pat.findall(s)) != 1:
+            raise SystemExit(f"Expected exactly one A:{key} block in 13.md; refusing a partial report update.")
         s = pat.sub(lambda mo: mo.group(1) + fn(c) + mo.group(2), s)
     MD.write_text(s, encoding="utf-8")
     print("13.md updated from the latest run")
@@ -474,17 +499,49 @@ def chromium(p):
     return p.chromium.launch(executable_path=exe, args=["--no-sandbox"]) if exe else p.chromium.launch()
 
 
+def prediction_evidence(c, calls):
+    if set(calls) != {"fraud", "genuine"} or len({prediction["request_id"] for prediction in calls.values()}) != 2:
+        raise SystemExit("Screenshot evidence requires two distinct fraud and genuine requests.")
+    for prediction in calls.values():
+        if (str(prediction["model_version"]) != c["version"]
+                or prediction["threshold"] != c["m"]["threshold"]
+                or not 0 <= prediction["probability"] <= 1
+                or prediction["is_fraud"] != (prediction["probability"] >= prediction["threshold"])):
+            raise SystemExit("A screenshot prediction does not match the verified Docker model.")
+    inspection = ("import csv,json,config; "
+                  "rows=list(csv.DictReader(config.LOG_PATH.open(newline='', encoding='utf-8'))); "
+                  "print(json.dumps({'path':str(config.LOG_PATH), 'total_rows':len(rows), 'rows':rows}))")
+    log = json.loads(compose("exec", "-T", "prediction-api", "python", "-c", inspection))
+    matched = []
+    for prediction in calls.values():
+        records = [row for row in log["rows"] if row["request_id"] == prediction["request_id"]]
+        if len(records) != 1:
+            raise SystemExit("A screenshot request is missing or duplicated in the Docker prediction log.")
+        row = records[0]
+        if (row["model_version"] != str(prediction["model_version"])
+                or float(row["probability"]) != round(prediction["probability"], 6)
+                or int(row["is_fraud"]) != int(prediction["is_fraud"])
+                or float(row["latency_ms"]) != round(prediction["latency_ms"], 3)):
+            raise SystemExit("A screenshot prediction disagrees with its persisted log row.")
+        matched.append(row)
+    log["rows"] = matched
+    return {"source": "Docker", "model_version": c["version"], "run_id": c["run_id"],
+            "threshold": c["m"]["threshold"], "calls": calls, "log": log}
+
+
 def take_shots(c):
     from playwright.sync_api import sync_playwright
     SHOTS.mkdir(parents=True, exist_ok=True)
     nb = c["nb"]
-    calls = cell_text(nb, "# Cell: send one fraud row").split("--- ")
-    pages = {
-        "pipeline_run": pipeline_page(c),
-        "test_fraud": page("POST /predict - fraud transaction", f"<pre>{html.escape('--- ' + calls[1])}</pre>"),
-        "test_genuine": page("POST /predict - genuine transaction", f"<pre>{html.escape('--- ' + calls[2])}</pre>"),
-        "prediction_log": page("Prediction log (predictions_log.csv)", f"<pre>{html.escape(cell_text(nb, 'Rows logged'))}</pre>{cell_html(nb, 'Rows logged')}"),
-    }
+    c.pop("screenshot_evidence", None)
+    pages = {"pipeline_run": pipeline_page(c)}
+    if not c.get("live_docker"):
+        calls = cell_text(nb, "# Cell: send one fraud row").split("--- ")
+        pages.update({
+            "test_fraud": page("POST /predict - fraud transaction", f"<pre>{html.escape('--- ' + calls[1])}</pre>"),
+            "test_genuine": page("POST /predict - genuine transaction", f"<pre>{html.escape('--- ' + calls[2])}</pre>"),
+            "prediction_log": page("Prediction log (predictions_log.csv)", f"<pre>{html.escape(cell_text(nb, 'Rows logged'))}</pre>{cell_html(nb, 'Rows logged')}"),
+        })
     env = {**os.environ, "MLFLOW_DISABLE_AGENT_HINT": "1"}
     processes = []
     try:
@@ -494,7 +551,7 @@ def take_shots(c):
             health = read_json(f"{api_url}/health")
             champion = read_json(f"{registry_url}/api/2.0/mlflow/registered-models/alias?name=fraud-model&alias=champion")
             if str(health["model_version"]) != c["docker_version"] or str(champion["model_version"]["version"]) != c["docker_version"]:
-                raise SystemExit("Live Docker and saved notebook versions differ. Save the latest notebook before rebuilding the report.")
+                raise SystemExit("The live Docker model changed after report verification; rerun the report.")
             expected_threshold = c["docker_health"]["threshold"] if c["docker_health"] else c["m"]["threshold"]
             if health["threshold"] != expected_threshold:
                 raise SystemExit("Live Docker and evaluation thresholds differ. Regenerate matching training evidence before building the report.")
@@ -561,7 +618,51 @@ def take_shots(c):
                     or served["threshold"] != c["m"]["threshold"]):
                 raise SystemExit("Swagger's live health response does not match the verified report model.")
             health_block.locator(".live-responses-table").wait_for()
-            pg.screenshot(path=str(SHOTS / "fastapi_docs.png"), full_page=True)
+            response_box = health_block.locator(".live-responses-table").bounding_box()
+            if response_box is None:
+                raise RuntimeError("Swagger's executed health response is not visible.")
+            pg.screenshot(path=str(SHOTS / "fastapi_docs.png"), full_page=True,
+                          clip={"x": 0, "y": 0, "width": 1200,
+                                "height": response_box["y"] + response_box["height"] + 16})
+            if c.get("live_docker"):
+                samples = json.loads((ROOT / "artifacts" / "sample_requests.json").read_text(encoding="utf-8"))
+                calls = {}
+                pg.set_viewport_size({"width": 1100, "height": 800})
+                for kind in ("fraud", "genuine"):
+                    print(f"Capturing live Swagger prediction: {kind}", flush=True)
+                    pg.goto(f"{api_url}/docs")
+                    prediction_block = pg.locator(".opblock-post:has(.opblock-summary-path[data-path='/predict'])")
+                    prediction_block.locator(".opblock-summary").click()
+                    prediction_block.get_by_role("button", name="Try it out", exact=True).click()
+                    prediction_block.locator("textarea").fill(json.dumps(samples[kind], indent=2))
+                    with pg.expect_response(f"{api_url}/predict") as executed_prediction:
+                        prediction_block.get_by_role("button", name="Execute", exact=True).click()
+                    response = executed_prediction.value
+                    if response.status != 200:
+                        raise SystemExit(f"The live Swagger {kind} prediction returned HTTP {response.status}.")
+                    calls[kind] = response.json()
+                    prediction_block.locator(".live-responses-table").wait_for()
+                    request_box = prediction_block.locator(".request-url").bounding_box()
+                    response_box = prediction_block.locator(".live-responses-table").bounding_box()
+                    if request_box is None or response_box is None:
+                        raise RuntimeError("Swagger's prediction request URL and response are not visible.")
+                    scroll_y = pg.evaluate("window.scrollY")
+                    pg.screenshot(path=str(SHOTS / f"test_{kind}.png"), full_page=True,
+                                clip={"x": request_box["x"], "y": request_box["y"] + scroll_y - 10,
+                                        "width": request_box["width"],
+                                    "height": response_box["y"] + response_box["height"] - request_box["y"] + 26})
+                evidence = prediction_evidence(c, calls)
+                log = evidence["log"]
+                columns = ("timestamp", "request_id", "probability", "is_fraud", "latency_ms", "model_version")
+                header = "".join(f"<th>{field}</th>" for field in columns)
+                rows = "".join("<tr>" + "".join(f"<td>{html.escape(row[field])}</td>" for field in columns) + "</tr>"
+                               for row in log["rows"])
+                pg.set_viewport_size({"width": 1100, "height": 400})
+                pg.set_content(page("Docker prediction log - request-ID-verified records",
+                                    f"<p>Champion model version: {html.escape(c['version'])} | CSV: {html.escape(log['path'])}</p>"
+                                    f"<p>Total CSV rows: {log['total_rows']}. Showing the two requests captured in Swagger.</p>"
+                                    f"<table><thead><tr>{header}</tr></thead><tbody>{rows}</tbody></table>"))
+                pg.locator("body").screenshot(path=str(SHOTS / "prediction_log.png"))
             print("Capturing screenshot: MLflow registry", flush=True)
             pg.set_viewport_size({"width": 1280, "height": 800})
             # The MLflow page is a JavaScript app: wait until the model name is really on the screen
@@ -582,6 +683,15 @@ def take_shots(c):
             if not ok:
                 raise RuntimeError("MLflow did not render its registry and champion; refusing to publish an incomplete report.")
             b.close()
+        if c.get("live_docker"):
+            current = read_json(f"{registry_url}/api/2.0/mlflow/registered-models/alias?name=fraud-model&alias=champion")["model_version"]
+            if str(current["version"]) != c["version"] or current["run_id"] != c["run_id"]:
+                raise SystemExit("The Docker champion changed during capture; rerun the report.")
+            evidence["captured_at"] = datetime.now(timezone.utc).isoformat()
+            evidence["images"] = {name: hashlib.sha256((SHOTS / f"{name}.png").read_bytes()).hexdigest()
+                                  for name in (*pages, "test_fraud", "test_genuine", "prediction_log", "fastapi_docs", "mlflow")}
+            (SHOTS / "evidence.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+            c["screenshot_evidence"] = evidence
         print("screenshots saved in docs/screenshots/")
     finally:
         for process in processes:

@@ -1,6 +1,6 @@
 {
-  "model_version": "3",
-  "run_id": "be1c7fd0ec25477481c9e2bc1d0da623",
+  "model_version": "6",
+  "run_id": "9632b63cecda420891f5bec5223237b5",
   "tracking_uri": "sqlite:///C:\\Projects\\SE-ML-Assessments\\Assigenment-1\\mlflow.db",
   "threshold": 0.7691997375810586,
   "rows": 56746,
