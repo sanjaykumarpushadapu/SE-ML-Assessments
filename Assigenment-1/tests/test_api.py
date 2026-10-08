@@ -136,3 +136,12 @@ def test_BR009_response_carries_model_version(client, valid_payload):
     """Responses and /health must show the model version being served."""
     assert client.post("/predict", json=valid_payload).json()["model_version"] == "7"
     assert client.get("/health").json()["model_version"] == "7"
+
+
+def test_BR009_tracking_uri_can_point_to_registry_service(monkeypatch):
+    """In Docker Compose the API must reach the registry service through MLFLOW_TRACKING_URI."""
+    import importlib
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://registry:5000")
+    assert importlib.reload(config).TRACKING_URI == "http://registry:5000"
+    monkeypatch.delenv("MLFLOW_TRACKING_URI")
+    assert importlib.reload(config).TRACKING_URI.startswith("sqlite:///")  # default: the local file

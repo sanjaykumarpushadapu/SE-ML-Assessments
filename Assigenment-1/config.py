@@ -3,6 +3,7 @@
 Every other file imports its settings from here, so a value such as the seed or the
 target recall is never typed in two different places.
 """
+import os
 from pathlib import Path
 
 # Folder that contains this file (the project folder, i.e. where the notebook runs).
@@ -15,7 +16,8 @@ ARTIFACTS_DIR = ROOT / "artifacts"       # metrics.json and sample requests are 
 LOG_PATH = ROOT / "predictions_log.csv"  # written by log_prediction() on every API call
 
 # MLflow keeps its runs in a local SQLite file; model files go to the mlruns folder.
-TRACKING_URI = f"sqlite:///{ROOT / 'mlflow.db'}"
+# In Docker Compose the API reaches the registry service over HTTP instead (MLFLOW_TRACKING_URI, Section 8).
+TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", f"sqlite:///{ROOT / 'mlflow.db'}")
 ARTIFACT_ROOT = (ROOT / "mlruns").as_uri()
 EXPERIMENT = "fraud-detection"
 MODEL_NAME = "fraud-model"  # name in the model registry

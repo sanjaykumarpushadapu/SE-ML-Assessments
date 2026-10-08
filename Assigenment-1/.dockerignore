@@ -1,0 +1,4 @@
+# Only the requirements file is copied into the image; everything else is mounted at run time,
+# so the large dataset is not sent to Docker during the build.
+*
+!requirements-api.txt

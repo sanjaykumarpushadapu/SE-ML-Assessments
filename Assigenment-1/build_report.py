@@ -176,7 +176,23 @@ def g_shots(c):
         ("Genuine test call", "test_genuine", f"A genuine row from the test set. The probability is {g['probability']:.3f}, {'below' if g['probability'] < g['threshold'] else 'above'} the threshold {g['threshold']:.4f}, so is_fraud is {str(g['is_fraud']).lower()}."),
         ("Prediction log", "prediction_log", f"The prediction log after the test calls and the 100 latency requests: {c['rows_logged']} rows, each with timestamp, request id, probability, label, latency and model version."),
     ]
+    dock = docker_output(c["nb"])
+    if dock:
+        ver = re.search(r"champion -> version (\d+)", dock)
+        rows.append(("Docker Compose", "docker_compose",
+                     "The two microservices running as containers: registry (MLflow server, port 5000) and prediction-api "
+                     "(FastAPI, port 8000), both healthy. The API answers /health and /predict through the containers and "
+                     f"the registry reports fraud-model@champion as version {ver.group(1) if ver else c['version']}."))
     return "\n\n".join(f"**Screenshot {i} - {a}.** {e}\n\n![{a}](docs/screenshots/{b}.png)" for i, (a, b, e) in enumerate(rows, 1))
+
+
+def docker_output(nb):
+    """Output of the Docker Compose cell, or "" when Docker was not available in the last run."""
+    try:
+        out = cell_text(nb, "# Cell: build and start both containers")
+    except SystemExit:
+        return ""
+    return out if "prediction-api" in out else ""
 
 
 def g_conclusion(c):
@@ -187,7 +203,9 @@ def g_conclusion(c):
              f"the test recall is {pct(t['recall'])} against the 90% target, so that goal is {'met' if ok_r else 'not met'}"
              + (f". The estimated fraud loss reduction is {pct(t['loss_reduction'])} against the 30% target ({'met' if m['targets_met'].get('loss_ok') else 'not met'})" if "loss_reduction" in t else ""))
     return ("In this assignment we built a fraud detection system with a pipe-and-filter training pipeline, an MLflow registry and a FastAPI "
-            f"microservice that serves the champion model, with prediction logging and {c['tests']} automated tests. Against our goals: {goals}. "
+            f"microservice that serves the champion model, with prediction logging and {c['tests']} automated tests."
+            f"{' With Docker Compose the registry and the prediction API also run as two separate containers.' if docker_output(c['nb']) else ''}"
+            f" Against our goals: {goals}. "
             "From this work we learned that with so few frauds in each split the recall on the test set can differ from the validation recall, "
             "that the model for serving should be chosen on validation results only, and that a registry alias keeps the service independent "
             "of the model version. If we had more time we would try more tuning on validation, cross-validation for the threshold, and more fraud examples.")
@@ -196,19 +214,19 @@ def g_conclusion(c):
 def g_goals(c):
     m = c["m"]; t = m["test"]; med, p95, mx = c["lat"]
     yn = lambda ok: "Yes" if ok else "No"
-    return ("| Goal | GR4ML concept | Metric | Target | Result (latest run) | Met? |\n|---|---|---|---|---|---|\n"
-            f"| Catch fraud | Indicator of the strategic goal; softgoal High recall | Recall on the test set | at least 90% | {pct(t['recall'])} | {yn(m['targets_met']['recall_ok'])} |\n"
-            f"| Avoid blocking genuine customers | Indicator of the strategic goal; softgoal Few false alarms | False-positive rate on the test set | below 2% | {pct(t['fpr'], 2)} | {yn(m['targets_met']['fpr_ok'])} |\n"
-            f"| Decide while the payment is processed | Softgoal Low latency | p95 latency of the prediction API | below 200 ms | {p95} ms | {yn(float(p95) < 200)} |\n"
+    return ("| ID | Goal | GR4ML concept | Metric | Target | Result (latest run) | Met? |\n|---|---|---|---|---|---|---|\n"
+            f"| G1 | Catch fraud | Indicator of the strategic goal; softgoal High recall | Recall on the test set | at least 90% | {pct(t['recall'])} | {yn(m['targets_met']['recall_ok'])} |\n"
+            f"| G2 | Avoid blocking genuine customers | Indicator of the strategic goal; softgoal Few false alarms | False-positive rate on the test set | below 2% | {pct(t['fpr'], 2)} | {yn(m['targets_met']['fpr_ok'])} |\n"
+            f"| G3 | Decide while the payment is processed | Softgoal Low latency | p95 latency of the prediction API | below 200 ms | {p95} ms | {yn(float(p95) < 200)} |\n"
             + g_loss_row(m))
 
 
 def g_loss_row(m):
     t = m["test"]
     if "loss_reduction" not in t:
-        return "| Reduce losses | Strategic goal | Fraud loss | 30% reduction (business target) | run the notebook again | - |"
+        return "| G4 | Reduce losses | Strategic goal | Fraud loss | 30% reduction (business target) | run the notebook again | - |"
     ok = m["targets_met"].get("loss_ok", False)
-    return f"| Reduce losses | Strategic goal | Share of fraud money caught (test set) | at least 30% | {pct(t['loss_reduction'])} | {'Yes' if ok else 'No'} |"
+    return f"| G4 | Reduce losses | Strategic goal | Share of fraud money caught (test set) | at least 30% | {pct(t['loss_reduction'])} | {'Yes' if ok else 'No'} |"
 
 
 # ---------------------------------------------------------------- figures ----------------------
@@ -292,7 +310,10 @@ def code_appendix():
         src = "".join(c["source"])
         if src.startswith("%%writefile"):
             first, body = src.split("\n", 1)
-            out.append(f"#### {first.replace('%%writefile', '').strip()}\n\n```python\n{body.rstrip()}\n```\n")
+            name = first.replace('%%writefile', '').strip()
+            lang = {"yml": "yaml", "txt": "text", "dockerignore": "text"}.get(name.rsplit(".", 1)[-1], "python")
+            lang = "dockerfile" if name == "Dockerfile" else lang
+            out.append(f"#### {name}\n\n```{lang}\n{body.rstrip()}\n```\n")
         else:
             other.append(src.rstrip())
     notebook_cells = "\n\n".join(f"# ---------- notebook cell {i} ----------\n{s}" for i, s in enumerate(other, 1))
@@ -353,6 +374,8 @@ def take_shots(c):
         "test_genuine": page("POST /predict - genuine transaction", f"<pre>{html.escape('--- ' + calls[2])}</pre>"),
         "prediction_log": page("Prediction log (predictions_log.csv)", f"<pre>{html.escape(cell_text(nb, 'Rows logged'))}</pre>{cell_html(nb, 'Rows logged')}"),
     }
+    if docker_output(nb):
+        pages["docker_compose"] = page("docker compose up: registry + prediction-api", f"<pre>{html.escape(docker_output(nb))}</pre>")
     env = {**os.environ, "MLFLOW_DISABLE_AGENT_HINT": "1"}
     mlflow = subprocess.Popen([sys.executable, "-m", "mlflow", "server", "--backend-store-uri", f"sqlite:///{ROOT / 'mlflow.db'}", "--port", "5055"],
                               cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

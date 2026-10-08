@@ -1,0 +1,37 @@
+# Two microservices: the model registry and the prediction API.
+# ${PWD} is this project folder. It is mounted at the same path inside both containers because
+# the registry stores the model files with their full path in this folder.
+services:
+  registry:
+    build: .
+    image: fraud-detection:1.0
+    working_dir: ${PWD}
+    volumes:
+      - ${PWD}:${PWD}
+    command: >
+      mlflow server --backend-store-uri sqlite:///${PWD}/mlflow.db
+      --default-artifact-root ${PWD}/mlruns --host 0.0.0.0 --port 5000 --allowed-hosts "*"
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 5s
+      retries: 24
+
+  prediction-api:
+    image: fraud-detection:1.0
+    working_dir: ${PWD}
+    volumes:
+      - ${PWD}:${PWD}
+    environment:
+      MLFLOW_TRACKING_URI: http://registry:5000   # the API asks the registry service for the champion model
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      registry:
+        condition: service_healthy   # start only when the registry answers
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      retries: 24
