@@ -1,0 +1,115 @@
+INFO:     Started server process [18379]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:57487 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57489 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57491 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57493 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57495 - "POST /predict HTTP/1.1" 422 Unprocessable Content
+INFO:     127.0.0.1:57497 - "POST /predict HTTP/1.1" 422 Unprocessable Content
+INFO:     127.0.0.1:57499 - "POST /predict HTTP/1.1" 422 Unprocessable Content
+INFO:     127.0.0.1:57501 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57503 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57505 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57507 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57509 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57511 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57513 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57515 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57517 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57519 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57521 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57523 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57525 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57527 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57529 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57531 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57533 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57535 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57537 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57539 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57541 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57543 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57545 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57547 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57549 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57551 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57553 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57555 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57557 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57559 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57561 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57563 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57565 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57567 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57569 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57571 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57573 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57575 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57577 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57579 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57581 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57583 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57585 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57587 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57589 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57591 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57593 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57595 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57597 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57599 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57601 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57603 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57605 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57607 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57609 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57611 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57613 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57615 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57617 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57619 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57621 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57623 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57625 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57627 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57629 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57631 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57633 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57635 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57637 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57639 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57641 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57643 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57645 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57647 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57649 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57651 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57653 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57655 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57657 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57659 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57661 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57663 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57665 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57667 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57669 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57671 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57673 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57675 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57677 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57679 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57681 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57683 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57685 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57687 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57689 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57691 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57693 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57695 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57697 - "POST /predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57699 - "POST /predict HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [18379]
