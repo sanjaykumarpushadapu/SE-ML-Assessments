@@ -5,28 +5,36 @@ This file only connects the filters; the real work happens inside each filter.
 import json
 import logging
 
+import pandas as pd
+
 import config
 from pipeline.clean import clean
 from pipeline.evaluate import evaluate_test, evaluate_validation, targets_met
 from pipeline.features import build_features
 from pipeline.ingest import ingest
 from pipeline.split import split
-from pipeline.train import CANDIDATES, train
+from pipeline.train import CANDIDATES, cross_val_proba, train
 
 log = logging.getLogger("pipeline")
 
 
 def pick_winner(fitted: dict) -> str:
-    """Candidate with the lowest validation false-positive rate; PR-AUC breaks ties.
+    """Candidate with the highest validation recall; PR-AUC breaks ties.
 
-    Every candidate already reaches the target recall on validation because its
-    threshold was chosen for that, so the false-positive rate decides (goal G2).
+    Every candidate's threshold already keeps its validation false-positive rate within
+    the FPR budget (goal G2), so recall decides (goal G1). A candidate that does not reach
+    the target recall on validation is not eligible; if none does, the pipeline stops
+    instead of registering a model that is known to miss the target.
     """
-    return min(fitted, key=lambda n: (fitted[n][2]["fpr"], -fitted[n][2]["pr_auc"]))
+    ok = [n for n in fitted if fitted[n][2]["recall"] >= config.TARGET_RECALL]
+    if not ok:
+        raise ValueError(f"No candidate reaches recall {config.TARGET_RECALL} with FPR <= "
+                         f"{config.FPR_BUDGET} on validation.")
+    return max(ok, key=lambda n: (fitted[n][2]["recall"], fitted[n][2]["pr_auc"]))
 
 
 def run_pipeline(data_path=config.DATA_PATH, candidates=CANDIDATES, track: bool = True) -> dict:
-    """Run every stage, pick the candidate with the lowest validation false-positive rate, test it once."""
+    """Run every stage, pick the candidate with the highest validation recall, test it once."""
     # Each stage hands its output to the next one.
     raw = ingest(data_path)
     log.info("[1/6 ingest]   rows=%d columns=%d", *raw.shape)
@@ -42,14 +50,20 @@ def run_pipeline(data_path=config.DATA_PATH, candidates=CANDIDATES, track: bool 
     log.info("[4/6 split]    train=%d val=%d test=%d", len(parts["X_train"]),
              len(parts["X_val"]), len(parts["X_test"]))
 
-    # Train every candidate on the training set and judge it on the validation set.
+    # Training and validation rows together form the development set; the test set stays aside.
+    # Each candidate is scored on it with CV_FOLDS-fold cross-validation (out-of-fold, so every row is
+    # scored by a model that did not see it) and the threshold is chosen on those scores. The
+    # final model is then fitted on the whole development set.
+    X_dev = pd.concat([parts["X_train"], parts["X_val"]])
+    y_dev = pd.concat([parts["y_train"], parts["y_val"]])
     fitted = {}
     for name in candidates:
-        model = train(parts["X_train"], parts["y_train"], name)
-        threshold, val_m = evaluate_validation(model, parts["X_val"], parts["y_val"])
+        model = train(X_dev, y_dev, name)
+        threshold, val_m = evaluate_validation(y_dev, cross_val_proba(X_dev, y_dev, name))
         fitted[name] = (model, threshold, val_m)
-        log.info("[5/6 train]    %-19s val recall=%.3f precision=%.3f pr_auc=%.4f threshold=%.4f",
-                 name, val_m["recall"], val_m["precision"], val_m["pr_auc"], threshold)
+        log.info("[5/6 train]    %-19s val recall=%.3f fpr=%.4f precision=%.3f pr_auc=%.4f "
+                 "threshold=%.4f", name, val_m["recall"], val_m["fpr"], val_m["precision"],
+                 val_m["pr_auc"], threshold)
 
     # The winner is chosen from validation results only. Only now is the test set used, once.
     winner = pick_winner(fitted)
@@ -62,7 +76,8 @@ def run_pipeline(data_path=config.DATA_PATH, candidates=CANDIDATES, track: bool 
     log.info("Targets on test set: recall>=%.2f -> %s, fpr<%.2f -> %s", config.TARGET_RECALL,
              checks["recall_ok"], config.MAX_FPR, checks["fpr_ok"])
 
-    result = {"winner": winner, "threshold": threshold, "val": val_m, "test": test_m,
+    result = {"winner": winner, "threshold": threshold, "fpr_budget": config.FPR_BUDGET,
+              "val": val_m, "test": test_m,
               "targets_met": checks,
               "candidates": {n: {"threshold": t, "val": m} for n, (_, t, m) in fitted.items()}}
 
@@ -71,7 +86,7 @@ def run_pipeline(data_path=config.DATA_PATH, candidates=CANDIDATES, track: bool 
         for name, (m, t, vm) in fitted.items():
             is_win = name == winner
             # Every candidate is logged for comparison; only the winner is registered.
-            _, version = log_candidate(name, m, parts["X_train"], t, vm,
+            _, version = log_candidate(name, m, X_dev, t, vm,
                                        test_m if is_win else None, register=is_win)
             if is_win:
                 result["model_version"] = version

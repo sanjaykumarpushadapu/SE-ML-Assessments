@@ -14,17 +14,33 @@ from pipeline import run_pipeline as rp
 
 
 # ---- BR-002 threshold chosen on validation ---------------------------------------------
-def test_BR002_threshold_meets_target_recall_on_validation(tiny_model, tiny_parts):
-    """The chosen threshold must reach the target recall on the validation set."""
-    thr, val_m = evaluate.evaluate_validation(tiny_model, tiny_parts["X_val"], tiny_parts["y_val"])
+def test_BR002_threshold_meets_targets_on_validation(tiny_parts):
+    """On out-of-fold validation scores the threshold keeps FPR within budget and reaches the target recall."""
+    proba = train_mod.cross_val_proba(tiny_parts["X_train"], tiny_parts["y_train"],
+                                      "logistic_regression")
+    thr, val_m = evaluate.evaluate_validation(tiny_parts["y_train"], proba)
+    assert val_m["fpr"] <= config.FPR_BUDGET
     assert val_m["recall"] >= config.TARGET_RECALL
     assert val_m["threshold"] == thr
 
 
+def test_BR002_threshold_is_highest_recall_within_fpr_budget():
+    """The threshold takes the most recall the FPR budget allows, with the fewest false alarms for it."""
+    y = [0] * 10 + [1] * 4
+    proba = [0.1] * 8 + [0.95, 0.5] + [0.9, 0.8, 0.7, 0.05]
+    # max_fpr 0.1 allows one false alarm (0.95): recall 3/4 is reached at threshold 0.7.
+    assert evaluate.choose_threshold(y, proba, max_fpr=0.1) == 0.7
+    # max_fpr 0.2 would allow the 0.5 alarm too, but that adds no recall, so 0.7 stays.
+    assert evaluate.choose_threshold(y, proba, max_fpr=0.2) == 0.7
+    # With no FPR limit every fraud is caught.
+    assert evaluate.choose_threshold(y, proba, max_fpr=1.0) == 0.05
+
+
 def test_BR002_unreachable_recall_raises():
-    """If the target recall cannot be reached, choose_threshold must raise an error and not guess."""
+    """If no candidate reaches the target recall on validation, the pipeline must stop and not guess."""
+    fitted = {"a": (None, 0.5, {"recall": 0.80, "fpr": 0.01, "pr_auc": 0.9})}
     with pytest.raises(ValueError):
-        evaluate.choose_threshold([0, 1, 1], [0.9, 0.1, 0.2], target_recall=1.01)
+        rp.pick_winner(fitted)
 
 
 def test_BR002_threshold_not_hard_coded_in_api():
@@ -153,11 +169,12 @@ def test_BR011_same_seed_gives_same_split_and_results(tiny_df, tmp_path):
     assert json.dumps(a["test"], sort_keys=True) == json.dumps(b["test"], sort_keys=True)
 
 
-def test_BR006_winner_is_lowest_validation_fpr_then_pr_auc():
-    """The winner has the lowest validation false-positive rate; PR-AUC only breaks ties."""
-    fitted = {"a": (None, 0.5, {"fpr": 0.04, "pr_auc": 0.9}),
-              "b": (None, 0.5, {"fpr": 0.01, "pr_auc": 0.8}),
-              "c": (None, 0.5, {"fpr": 0.01, "pr_auc": 0.7})}
+def test_BR006_winner_is_highest_validation_recall_then_pr_auc():
+    """The winner has the highest validation recall; PR-AUC breaks ties; below-target candidates are skipped."""
+    fitted = {"a": (None, 0.5, {"recall": 0.85, "fpr": 0.010, "pr_auc": 0.99}),
+              "b": (None, 0.5, {"recall": 0.93, "fpr": 0.015, "pr_auc": 0.8}),
+              "c": (None, 0.5, {"recall": 0.93, "fpr": 0.014, "pr_auc": 0.7}),
+              "d": (None, 0.5, {"recall": 0.91, "fpr": 0.012, "pr_auc": 0.9})}
     assert rp.pick_winner(fitted) == "b"
 
 

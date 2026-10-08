@@ -30,5 +30,9 @@ TARGET = "Class"                  # 1 = fraud, 0 = genuine
 # Measurable goals from the report (Section 2.2).
 TARGET_RECALL = 0.90  # catch at least 90% of the frauds
 MAX_FPR = 0.02        # wrongly flag less than 2% of genuine transactions
+# Operating point used to choose the threshold. It is kept below MAX_FPR as a safety margin, so the
+# threshold spends most of the false-alarm budget on catching fraud without crossing the 2% limit.
+FPR_BUDGET = 0.015
+CV_FOLDS = 5          # folds used to get out-of-fold validation scores for the threshold (BR-002)
 MIN_LOSS_REDUCTION = 0.30  # business goal: cut fraud loss by 30% (measured as the share of fraud money caught)
 MAX_P95_MS = 200.0    # 95% of API calls must answer within 200 ms

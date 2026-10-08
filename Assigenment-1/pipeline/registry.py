@@ -23,6 +23,8 @@ def log_candidate(name: str, model, X_example, threshold: float, val_metrics: di
         mlflow.log_param("model_name", name)
         mlflow.log_param("seed", config.SEED)
         mlflow.log_param("threshold", threshold)
+        mlflow.log_param("fpr_budget", config.FPR_BUDGET)  # how the threshold was chosen
+        mlflow.log_param("cv_folds", config.CV_FOLDS)
         # Metrics: what came out (counts such as tn/fp are left out of the metric table).
         mlflow.log_metrics({f"val_{k}": v for k, v in val_metrics.items()
                             if k not in ("tn", "fp", "fn", "tp")})

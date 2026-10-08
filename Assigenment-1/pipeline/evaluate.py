@@ -2,24 +2,27 @@
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (average_precision_score, confusion_matrix, f1_score,
-                             precision_recall_curve, precision_score, recall_score,
-                             roc_auc_score)
+                             precision_score, recall_score, roc_auc_score, roc_curve)
 
 import config
 
 
-def choose_threshold(y_true, proba, target_recall: float = config.TARGET_RECALL) -> float:
-    """Highest threshold that still gives recall >= target on the given data."""
-    # precision_recall_curve lists every possible threshold with its recall.
-    # Recall goes down as the threshold goes up.
-    _, recall, thresholds = precision_recall_curve(y_true, proba)
-    # All thresholds that still reach the target recall.
-    ok = np.where(recall[:-1] >= target_recall)[0]
-    if len(ok) == 0:
-        raise ValueError(f"Recall {target_recall} cannot be reached on this data.")
-    # The last one is the highest such threshold, i.e. the fewest false alarms
-    # while still meeting the recall target.
-    return float(thresholds[ok[-1]])
+def choose_threshold(y_true, proba, max_fpr: float = config.FPR_BUDGET) -> float:
+    """Threshold with the highest recall whose false-positive rate stays within max_fpr.
+
+    The false-positive rate is measured on tens of thousands of genuine rows, so it is a
+    stable estimate. Recall is measured on a few hundred frauds and is much noisier. The
+    old rule (highest threshold with recall just >= target) sat exactly on the edge of the
+    recall target and fell short on new data. Fixing the FPR instead and taking all the
+    recall it allows leaves headroom above the recall target whenever the model has it.
+    """
+    # roc_curve lists every threshold with its FPR and recall (TPR); both fall as the
+    # threshold rises. The label is fraud when proba >= threshold, as in compute_metrics.
+    fpr, recall, thresholds = roc_curve(y_true, proba)
+    ok = np.where(fpr <= max_fpr)[0]
+    # Highest recall within the FPR budget; argmax takes the first such point, which is the
+    # highest threshold with that recall, i.e. the fewest false alarms for it.
+    return float(thresholds[ok[np.argmax(recall[ok])]])
 
 
 def compute_metrics(y_true, proba, threshold: float) -> dict:
@@ -67,9 +70,13 @@ def loss_metrics(y_true, proba, threshold: float, amount) -> dict:
             "genuine_amount_blocked": float(amt[(y == 0) & flagged].sum())}
 
 
-def evaluate_validation(model, X_val: pd.DataFrame, y_val: pd.Series) -> tuple[float, dict]:
-    """Pick the threshold on the validation set and report validation metrics."""
-    proba = model.predict_proba(X_val)[:, 1]  # column 1 = probability of fraud
+def evaluate_validation(y_val, proba) -> tuple[float, dict]:
+    """Pick the threshold on validation scores and report validation metrics.
+
+    proba are out-of-fold probabilities (train.cross_val_proba), so no row was scored by a
+    model that was trained on it. Whether the recall target is reached is checked when the
+    winner is picked.
+    """
     threshold = choose_threshold(y_val, proba)
     return threshold, compute_metrics(y_val, proba, threshold)
 
