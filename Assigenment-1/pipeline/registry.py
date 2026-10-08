@@ -3,6 +3,7 @@ import mlflow
 from mlflow import MlflowClient
 
 import config
+from pipeline.evaluate import targets_met
 
 
 def _setup() -> None:
@@ -15,10 +16,22 @@ def _setup() -> None:
 
 
 def log_candidate(name: str, model, X_example, threshold: float, val_metrics: dict,
-                  test_metrics: dict | None = None, register: bool = False):
+                  test_metrics: dict | None = None, register: bool = False,
+                  allow_failed_acceptance: bool = False):
     """Log one candidate as an MLflow run; register it when it is the winner."""
+    accepted = (test_metrics is not None
+                and {"recall", "fpr", "loss_reduction"}.issubset(test_metrics)
+                and all(targets_met(test_metrics).values()))
+    if register and not accepted and not allow_failed_acceptance:
+        raise ValueError("Cannot promote a model with missing or failed acceptance checks. "
+                         "Use allow_failed_acceptance=True only for a demonstration.")
     _setup()
     with mlflow.start_run(run_name=name) as run:
+        mlflow.set_tags({
+            "model_quality_acceptance": "not_evaluated" if test_metrics is None else
+                                        ("passed" if accepted else "failed"),
+            "deployment_scope": "not_registered" if not register else
+                                ("demonstration_only" if allow_failed_acceptance else "quality_gated")})
         # Parameters: what was used. The API later reads "threshold" from here (BR-002).
         mlflow.log_param("model_name", name)
         mlflow.log_param("seed", config.SEED)

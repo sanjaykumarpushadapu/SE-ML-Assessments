@@ -1,6 +1,7 @@
 """Tests for the pipeline filters and the rules BR-002 to BR-006, BR-010 and BR-011."""
 import inspect
 import json
+from unittest.mock import MagicMock
 
 import joblib
 import numpy as np
@@ -127,6 +128,50 @@ def test_BR006_targets_flag_is_false_when_target_missed():
     bad = evaluate.compute_metrics([0, 0, 1, 1], [0.1, 0.6, 0.4, 0.9], 0.5)
     flags = evaluate.targets_met(bad)
     assert flags["recall_ok"] is False and flags["fpr_ok"] is False
+
+
+@pytest.mark.parametrize("metrics", [
+    None,
+    {"fpr": 0.01, "loss_reduction": 0.5},
+    {"recall": 0.95, "loss_reduction": 0.5},
+    {"recall": 0.95, "fpr": 0.01},
+    {"recall": 0.85, "fpr": 0.01, "loss_reduction": 0.5},
+    {"recall": 0.95, "fpr": 0.02, "loss_reduction": 0.5},
+    {"recall": 0.95, "fpr": 0.01, "loss_reduction": 0.2},
+])
+def test_BR006_registration_rejects_missing_or_failed_acceptance(monkeypatch, metrics):
+    from pipeline import registry
+
+    setup = MagicMock()
+    monkeypatch.setattr(registry, "_setup", setup)
+    with pytest.raises(ValueError, match="acceptance"):
+        registry.log_candidate("candidate", None, None, 0.5, {}, metrics, register=True)
+    setup.assert_not_called()
+
+
+@pytest.mark.parametrize("recall,demonstration,status,scope", [
+    (0.95, False, "passed", "quality_gated"),
+    (0.85, True, "failed", "demonstration_only"),
+])
+def test_BR006_registration_labels_strict_and_demonstration_runs(
+        monkeypatch, tiny_model, tiny_parts, recall, demonstration, status, scope):
+    from pipeline import registry
+
+    tracking = MagicMock()
+    tracking.start_run.return_value.__enter__.return_value.info.run_id = "verified-run"
+    tracking.sklearn.log_model.return_value.registered_model_version = "123"
+    client = MagicMock()
+    monkeypatch.setattr(registry, "_setup", MagicMock())
+    monkeypatch.setattr(registry, "mlflow", tracking)
+    monkeypatch.setattr(registry, "MlflowClient", MagicMock(return_value=client))
+    metrics = {"recall": recall, "fpr": 0.01, "loss_reduction": 0.5}
+    run_id, version = registry.log_candidate(
+        "candidate", tiny_model, tiny_parts["X_train"], 0.5, metrics, metrics,
+        register=True, allow_failed_acceptance=demonstration)
+    assert (run_id, version) == ("verified-run", "123")
+    tracking.set_tags.assert_called_once_with({
+        "model_quality_acceptance": status, "deployment_scope": scope})
+    client.set_registered_model_alias.assert_called_once_with(config.MODEL_NAME, config.ALIAS, "123")
 
 
 def test_BR006_test_set_not_used_for_threshold():

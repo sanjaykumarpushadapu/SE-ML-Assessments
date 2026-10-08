@@ -30,7 +30,8 @@ def pick_winner(fitted: dict) -> str:
     return min(fitted, key=lambda name: (fitted[name][2]["fpr"], -fitted[name][2]["pr_auc"]))
 
 
-def run_pipeline(data_path=config.DATA_PATH, candidates=CANDIDATES, track: bool = True) -> dict:
+def run_pipeline(data_path=config.DATA_PATH, candidates=CANDIDATES, track: bool = True,
+                 demonstration: bool = True) -> dict:
     """Run every stage, select on validation recall/FPR, then test the frozen choice once."""
     # Each stage hands its output to the next one.
     raw = ingest(data_path)
@@ -75,11 +76,15 @@ def run_pipeline(data_path=config.DATA_PATH, candidates=CANDIDATES, track: bool 
 
     if track:  # track=False lets the tests run the pipeline without MLflow
         from pipeline.registry import log_candidate
+        if demonstration and not all(checks.values()):
+            log.warning("Demonstration only: model-quality acceptance failed; "
+                        "the champion is not an accepted production model.")
         for name, (m, t, vm) in fitted.items():
             is_win = name == winner
             # Every candidate is logged for comparison; only the winner is registered.
             _, version = log_candidate(name, m, parts["X_train"], t, vm,
-                                       test_m if is_win else None, register=is_win)
+                                       test_m if is_win else None, register=is_win,
+                                       allow_failed_acceptance=demonstration)
             if is_win:
                 result["model_version"] = version
                 log.info("Registered %s version %s with alias '%s'", config.MODEL_NAME,

@@ -21,8 +21,8 @@ How it works
         Captions use docs/screenshots/evidence.json, checked against image hashes and the live model/run.
         --no-shots reuses that snapshot only when its model/run and images still match.
         Other screenshots show saved notebook pipeline output, live Compose status, and read-only Docker SQLite inspection.
-  * Charts (Figures 1-7) are not kept as files. Each one is copied from the notebook output into its
-    <!--A:fig_...--> block in 13.md as an embedded image, with a caption built from the same run.
+    * Charts are copied from the notebook output into their <!--A:fig_...--> blocks as embedded images.
+        The current model comparison uses the saved native results table; older notebooks use their comparison chart.
 """
 import argparse, ast, hashlib, html, json, os, re, socket, subprocess, sys, time
 from datetime import datetime, timezone
@@ -43,7 +43,10 @@ def cell_text(nb, marker):
     for c in nb["cells"]:
         source = "".join(c["source"])
         if c["cell_type"] == "code" and not source.startswith("%%writefile") and any(text in source for text in markers):
-            return "".join("".join(o.get("text", [])) for o in c.get("outputs", []) if o["output_type"] == "stream")
+            text = "".join("".join(o.get("text", [])) for o in c.get("outputs", []) if o["output_type"] == "stream")
+            if text:
+                return text
+            raise SystemExit(f"Cell with '{marker}' has no saved text output. Run the notebook and save its outputs first.")
     raise SystemExit(f"Cell with '{marker}' has no output. Run the notebook from top to bottom first.")
 
 
@@ -51,7 +54,7 @@ def cell_html(nb, marker):
     for c in nb["cells"]:
         if c["cell_type"] == "code" and marker in "".join(c["source"]):
             for o in c.get("outputs", []):
-                if o["output_type"] == "execute_result" and "text/html" in o["data"]:
+                if o["output_type"] in ("execute_result", "display_data") and "text/html" in o.get("data", {}):
                     return "".join(o["data"]["text/html"])
     return ""
 
@@ -69,6 +72,15 @@ def cell_image(nb, marker):
 def collect():
     m = json.loads(METRICS.read_text(encoding="utf-8"))
     nb = json.loads(NB.read_text(encoding="utf-8"))
+    for relative in ("config.py", "pipeline/train.py", "pipeline/evaluate.py", "pipeline/registry.py",
+                     "pipeline/run_pipeline.py", "tests/test_pipeline.py"):
+        marker = f"%%writefile {relative}\n"
+        writers = ["".join(cell["source"]).replace("\r\n", "\n") for cell in nb["cells"]
+                   if cell["cell_type"] == "code" and "".join(cell["source"]).replace("\r\n", "\n").startswith(marker)]
+        if (len(writers) != 1 or writers[0][len(marker):].rstrip("\n") !=
+                (ROOT / relative).read_text(encoding="utf-8").rstrip("\n")):
+            raise SystemExit(f"Saved notebook writer for {relative} differs from the project code. "
+                             "Accept the notebook edits (Keep All) and Save All before building the report.")
     pipe = cell_text(nb, ("# Cell: rebuild the registry", "# Cell: rebuild the native registry", "!python -m pipeline.run_pipeline"))
     if "[1/6 ingest]" not in pipe:
         pipe = docker_output(nb)
@@ -280,7 +292,11 @@ def g_registry(c):
     return (f"We stored {NAMES[m['winner']]} as fraud-model version {c['version']} in the {registry}, with the alias champion "
             f"and threshold {m['threshold']:.4f}. When the API starts, it looks up champion once and loads that version "
             "and its threshold. This keeps the model and threshold together even if champion changes while the API is starting. "
-            "We need to restart the API to load a new champion.")
+            "We need to restart the API to load a new champion. "
+            "This assignment uses explicit demonstration mode, so the served champion is not a production acceptance claim. "
+            "New runs record model_quality_acceptance and deployment_scope tags. "
+            "run_pipeline(demonstration=False) refuses to promote a winner with missing or failed recall, "
+            "false-positive or fraud-loss checks. Passing that gate still requires separate fresh-holdout and service validation.")
 
 
 def g_latency(c):
@@ -365,6 +381,7 @@ def g_conclusion(c):
     return ("In this assignment we built a fraud detection system with a pipe-and-filter training pipeline, an MLflow registry and a FastAPI "
             f"microservice that serves the champion model, with prediction logging and automated tests. In the saved notebook run, {c['tests']} tests passed."
             f"{' With Docker Compose the registry and the prediction API also run as two separate containers.' if docker_output(c['nb']) else ''}"
+            " This serves the selected model as an assignment demonstration, not as an accepted production model."
             f" Against our goals: {goals}. "
             "From this work we learned that with so few frauds in each split the recall on the test set can differ from the validation recall, "
             "that the model for serving should be chosen on validation results only, and that a registry alias keeps the service independent "
@@ -439,6 +456,12 @@ def g_fig_cm(c):
 
 
 def g_fig_models(c):
+    table = cell_html(c["nb"], "# Cell: read the native registry and show validation results")
+    if table:
+        return ("**Figure 6 - Model comparison on the validation set.** This saved native table shows all candidate "
+                f"validation results and the winner's test result for native model version {c['fraud_call']['model_version']}. "
+                "The test row reports the frozen winner; it was not used to select the model. "
+                "Docker model results are reported separately above.\n\n" + table)
     return fig(c, "# Cell: compare the two candidates", 6, "Model comparison on the validation set",
                "This saved native chart shows the earlier Logistic Regression and Random Forest comparison under the "
                "90% validation recall rule. It does not show the new boosted candidate. The current comparison is in the results table.")
